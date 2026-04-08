@@ -1,0 +1,15 @@
+[26/03/19-12:12:12.334][ConsoleInterpreter][I]Attemping connect
+[26/03/19-12:12:14.242][ConsoleInterpreter][T]connected failed: No route to host
+[26/03/19-12:13:07.412][ConsoleInterpreter][T]Connection established with console
+[26/03/19-16:39:37.359][UpdateHandler][T]Received data from updater: u
+[26/03/19-16:39:42.360][UpdateHandler][T]UpdateState: UPDATE_PENDING
+[26/03/19-16:40:04.345][State][T]StateFirmwareUpdate()
+[26/03/19-16:42:13.004][ValidatorContext][I]Chrony sincronizado correctamente.
+[26/03/19-16:42:16.299][ApplicationProfile][I]========= HW STATUS =========
+[26/03/19-16:42:16.299][ApplicationProfile][I]EMV        : OK
+[26/03/19-16:42:16.299][ApplicationProfile][I]QR         : OK
+[25/05/05-11:39:34.171][ApplicationContext][I]VL-550 v4.8.2-k0.0.4 Starting...
+[26/03/19-15:36:26.584][BroadcastRetriever][E]Syncing files
+[26/03/19-15:36:37.640][BroadcastRetriever][E]Files Synced
+[26/03/19-12:17:31.139][UpdateHandler][T]UpdateState: UPDATE_ERROR
+[26/03/19-12:22:21.175][UpdateHandler][T]UpdateState: NO_UPDATE_PENDING

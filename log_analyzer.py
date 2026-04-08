@@ -1,0 +1,426 @@
+"""
+Log Analyzer - Identifica eventos de interés en logs de validadores VL550/CGI
+Lee la lista de eventos desde un archivo .xlsx (lista-eventos-vl550.xlsx)
+
+Uso:
+    python log_analyzer.py <archivo_log.docx|.txt> [archivo_eventos.xlsx]
+
+Requiere: pip install python-docx openpyxl
+"""
+
+import re
+import sys
+import os
+import csv
+import html as h
+from collections import defaultdict
+from docx import Document
+from openpyxl import load_workbook
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lectura de eventos desde Excel
+# Columnas esperadas: ID | Mensaje en log | Significado
+# ─────────────────────────────────────────────────────────────────────────────
+def load_events_from_xlsx(xlsx_path):
+    """
+    Lee el Excel y devuelve lista de dicts:
+      { "id": int, "patron": str, "significado": str }
+    Filas con 'Mensaje en log' vacío se omiten (no se puede buscar nada).
+    """
+    wb = load_workbook(xlsx_path, read_only=True, data_only=True)
+    ws = wb.active
+
+    events = []
+    for row in ws.iter_rows(min_row=2, values_only=True):  # saltar encabezado
+        # columnas: ID, Mensaje en log, Significado
+        if len(row) < 2:
+            continue
+        eid        = row[0]
+        patron_raw = row[1]
+        significado = row[2] if len(row) > 2 else ""
+
+        # saltar filas sin ID o sin patrón de búsqueda
+        if not eid or not patron_raw:
+            continue
+
+        events.append({
+            "id":          int(eid),
+            "patron":      str(patron_raw).strip(),
+            "significado": str(significado).strip() if significado else "",
+        })
+
+    wb.close()
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lectura del log
+# ─────────────────────────────────────────────────────────────────────────────
+def extract_log_lines(file_path):
+    """Extrae líneas de texto de un .docx o .txt"""
+    if file_path.lower().endswith(".txt"):
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            return [line.rstrip() for line in f if line.strip()]
+    else:
+        doc = Document(file_path)
+        return [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Análisis
+# ─────────────────────────────────────────────────────────────────────────────
+TS_PATTERN = re.compile(r"^\[(\d{2}/\d{2}/\d{2}-\d{2}:\d{2}:\d{2}\.\d+)\]")
+
+
+def analyze_log(log_lines, events):
+    """
+    Busca cada evento en las líneas del log.
+    Retorna lista de dicts con todos los campos para el reporte.
+    """
+    # Compilar patrones una sola vez (búsqueda literal, case-insensitive)
+    compiled = [
+        (ev, re.compile(re.escape(ev["patron"]), re.IGNORECASE))
+        for ev in events
+    ]
+
+    results = []
+    for line_num, line in enumerate(log_lines, start=1):
+        ts_match  = TS_PATTERN.match(line)
+        timestamp = ts_match.group(1) if ts_match else "N/A"
+        # mensaje limpio: quitar prefijo [ts][modulo][nivel]
+        msg_clean = re.sub(r"^\[.*?\]\[.*?\]\[.*?\]", "", line).strip() or line
+
+        for ev, pattern in compiled:
+            if pattern.search(line):
+                results.append({
+                    "id":          ev["id"],
+                    "patron":      ev["patron"],
+                    "significado": ev["significado"],
+                    "timestamp":   timestamp,
+                    "linea_num":   line_num,
+                    "mensaje":     msg_clean,
+                    "linea":       line,
+                })
+
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reporte en consola con tablas
+# ─────────────────────────────────────────────────────────────────────────────
+def _col_widths(rows, headers):
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(str(cell)))
+    return widths
+
+
+def _print_table(headers, rows, title=""):
+    widths = _col_widths(rows, headers)
+    top = "┌" + "┬".join("─" * (w + 2) for w in widths) + "┐"
+    mid = "├" + "┼".join("─" * (w + 2) for w in widths) + "┤"
+    bot = "└" + "┴".join("─" * (w + 2) for w in widths) + "┘"
+
+    def row_line(cells):
+        return "│" + "│".join(f" {str(c):<{widths[i]}} " for i, c in enumerate(cells)) + "│"
+
+    if title:
+        print(f"\n  {title}")
+    print(top)
+    print(row_line(headers))
+    print(mid)
+    for r in rows:
+        print(row_line(r))
+    print(bot)
+
+
+def print_report(results, log_lines):
+    SEP = "═" * 100
+    print(f"\n{SEP}")
+    print(f"  ANÁLISIS DE LOG  │  {len(results)} ocurrencia(s) encontrada(s)  │  {len(log_lines)} líneas procesadas")
+    print(SEP)
+
+    if not results:
+        print("  No se encontraron eventos de interés.")
+        return
+
+    # ── Resumen por ID ───────────────────────────────────────────────────────
+    by_id = defaultdict(list)
+    for r in results:
+        by_id[r["id"]].append(r)
+
+    summary_rows = []
+    for eid in sorted(by_id.keys()):
+        sample = by_id[eid][0]
+        summary_rows.append([
+            eid,
+            len(by_id[eid]),
+            sample["patron"][:50] + ("…" if len(sample["patron"]) > 50 else ""),
+            sample["significado"][:60] + ("…" if len(sample["significado"]) > 60 else ""),
+        ])
+
+    _print_table(
+        headers=["ID", "Ocurrencias", "Patrón buscado", "Significado"],
+        rows=summary_rows,
+        title="RESUMEN POR TIPO DE EVENTO"
+    )
+
+    # ── Detalle cronológico ──────────────────────────────────────────────────
+    detail_rows = []
+    for r in results:
+        msg = r["mensaje"]
+        detail_rows.append([
+            r["id"],
+            r["timestamp"],
+            r["linea_num"],
+            msg[:70] + ("…" if len(msg) > 70 else ""),
+            r["significado"][:50] + ("…" if len(r["significado"]) > 50 else ""),
+        ])
+
+    _print_table(
+        headers=["ID", "Timestamp", "Línea", "Mensaje", "Significado"],
+        rows=detail_rows,
+        title="DETALLE CRONOLÓGICO"
+    )
+
+    print(f"\n{SEP}")
+    print(f"  Total ocurrencias: {len(results)}  │  Tipos distintos: {len(by_id)}")
+    print(SEP)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Exportación CSV
+# ─────────────────────────────────────────────────────────────────────────────
+def export_csv(results, output_path="eventos_encontrados.csv"):
+    fields = ["id", "patron", "significado", "timestamp", "linea_num", "mensaje", "linea"]
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(results)
+    print(f"\n  CSV exportado: {output_path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Exportación HTML
+# ─────────────────────────────────────────────────────────────────────────────
+def export_html(results, log_file, output_path="reporte_eventos.html"):
+    by_id = defaultdict(list)
+    for r in results:
+        by_id[r["id"]].append(r)
+
+    # Paleta de colores cíclica para los badges de ID
+    PALETTE = [
+        "#1a6fa8","#2e7d32","#6a1b9a","#c62828","#00838f",
+        "#ef6c00","#4527a0","#00695c","#ad1457","#37474f",
+    ]
+    id_color = {eid: PALETTE[i % len(PALETTE)] for i, eid in enumerate(sorted(by_id.keys()))}
+
+    def badge(eid):
+        c = id_color.get(eid, "#555")
+        return f"<span class='badge' style='background:{c}'>{eid}</span>"
+
+    # ── Resumen ──────────────────────────────────────────────────────────────
+    summary_rows = ""
+    for eid in sorted(by_id.keys()):
+        sample = by_id[eid][0]
+        count  = len(by_id[eid])
+        bar_w  = min(count * 18, 200)
+        summary_rows += (
+            f"<tr>"
+            f"<td class='ctr'>{badge(eid)}</td>"
+            f"<td class='ctr'>"
+            f"  <div class='bar-wrap'><div class='bar' style='width:{bar_w}px;background:{id_color[eid]}'></div>"
+            f"  <span class='bar-num'>{count}</span></div>"
+            f"</td>"
+            f"<td class='mono'>{h.escape(sample['patron'])}</td>"
+            f"<td>{h.escape(sample['significado'])}</td>"
+            f"</tr>\n"
+        )
+
+    # ── Detalle ──────────────────────────────────────────────────────────────
+    detail_rows = ""
+    for r in results:
+        detail_rows += (
+            f"<tr data-id='{r['id']}'>"
+            f"<td class='ctr'>{badge(r['id'])}</td>"
+            f"<td class='mono ts'>{h.escape(r['timestamp'])}</td>"
+            f"<td class='ctr'>{r['linea_num']}</td>"
+            f"<td class='mono msg'>{h.escape(r['mensaje'])}</td>"
+            f"<td class='sig'>{h.escape(r['significado'])}</td>"
+            f"</tr>\n"
+        )
+
+    # ── Opciones de filtro por ID ─────────────────────────────────────────────
+    filter_btns = "<button class='fbtn active' onclick=\"filterTable('all',this)\">Todos</button>\n"
+    for eid in sorted(by_id.keys()):
+        c = id_color[eid]
+        filter_btns += (
+            f"<button class='fbtn' style='--bc:{c}' onclick=\"filterTable({eid},this)\">"
+            f"ID {eid} <span class='fcnt'>({len(by_id[eid])})</span></button>\n"
+        )
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reporte de Eventos — {h.escape(log_file)}</title>
+<style>
+  *, *::before, *::after {{ box-sizing: border-box; margin:0; padding:0; }}
+  body   {{ font-family: Segoe UI, Arial, sans-serif; background:#eef1f6; color:#222; padding:28px 32px; }}
+  h1     {{ font-size:1.4rem; color:#1a3a5c; border-bottom:3px solid #1a6fa8;
+            padding-bottom:10px; margin-bottom:6px; }}
+  h2     {{ font-size:1rem; color:#1a3a5c; margin:32px 0 10px; text-transform:uppercase;
+            letter-spacing:.05em; }}
+  .meta  {{ background:#fff; border-left:4px solid #1a6fa8; padding:10px 18px;
+            margin:14px 0 28px; border-radius:4px; font-size:.88rem; color:#444;
+            display:flex; gap:24px; flex-wrap:wrap; }}
+  .meta strong {{ color:#1a3a5c; }}
+
+  /* ── Tarjetas de resumen rápido ── */
+  .cards {{ display:flex; gap:16px; flex-wrap:wrap; margin-bottom:28px; }}
+  .card  {{ background:#fff; border-radius:8px; padding:16px 22px;
+            box-shadow:0 1px 4px rgba(0,0,0,.1); min-width:140px; text-align:center; }}
+  .card .num  {{ font-size:2rem; font-weight:700; color:#1a6fa8; line-height:1; }}
+  .card .lbl  {{ font-size:.78rem; color:#666; margin-top:4px; }}
+
+  /* ── Tablas ── */
+  .tbl-wrap {{ overflow-x:auto; border-radius:8px; box-shadow:0 1px 5px rgba(0,0,0,.1);
+               margin-bottom:36px; }}
+  table  {{ border-collapse:collapse; width:100%; background:#fff; font-size:.86rem; }}
+  thead tr {{ background:#1a3a5c; }}
+  th     {{ color:#fff; padding:10px 14px; text-align:left; white-space:nowrap;
+            font-size:.82rem; font-weight:600; letter-spacing:.03em; }}
+  td     {{ padding:8px 14px; border-bottom:1px solid #e4e8f0; vertical-align:top; }}
+  tbody tr:last-child td {{ border-bottom:none; }}
+  tbody tr:hover td {{ background:#f0f5ff; }}
+  tbody tr.hidden   {{ display:none; }}
+
+  /* ── Elementos ── */
+  .badge {{ display:inline-block; padding:3px 9px; border-radius:12px; color:#fff;
+            font-size:.78rem; font-weight:700; letter-spacing:.02em; }}
+  .mono  {{ font-family: Consolas, 'Courier New', monospace; font-size:.82rem; }}
+  .ts    {{ white-space:nowrap; color:#555; }}
+  .msg   {{ word-break:break-word; max-width:420px; }}
+  .sig   {{ color:#2e4a6e; font-size:.84rem; }}
+  .ctr   {{ text-align:center; }}
+
+  /* ── Barra de ocurrencias ── */
+  .bar-wrap {{ display:flex; align-items:center; gap:8px; }}
+  .bar      {{ height:10px; border-radius:5px; min-width:4px; }}
+  .bar-num  {{ font-weight:700; font-size:.85rem; color:#333; }}
+
+  /* ── Filtros ── */
+  .filters {{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }}
+  .fbtn    {{ padding:5px 12px; border-radius:16px; border:2px solid var(--bc,#1a6fa8);
+              background:#fff; color:var(--bc,#1a6fa8); font-size:.8rem; font-weight:600;
+              cursor:pointer; transition:all .15s; }}
+  .fbtn:hover, .fbtn.active {{ background:var(--bc,#1a6fa8); color:#fff; }}
+  .fcnt  {{ font-weight:400; opacity:.85; }}
+</style>
+</head>
+<body>
+
+<h1>Reporte de Eventos de Log</h1>
+<div class="meta">
+  <span><strong>Archivo:</strong> {h.escape(log_file)}</span>
+  <span><strong>Ocurrencias totales:</strong> {len(results)}</span>
+  <span><strong>Tipos de evento:</strong> {len(by_id)}</span>
+</div>
+
+<div class="cards">
+  <div class="card"><div class="num">{len(results)}</div><div class="lbl">Ocurrencias totales</div></div>
+  <div class="card"><div class="num">{len(by_id)}</div><div class="lbl">Tipos de evento</div></div>
+  <div class="card"><div class="num">{max((len(v) for v in by_id.values()), default=0)}</div><div class="lbl">Máx. ocurrencias (un tipo)</div></div>
+</div>
+
+<h2>Resumen por Tipo de Evento</h2>
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>ID</th><th>Ocurrencias</th><th>Patrón buscado</th><th>Significado</th></tr></thead>
+  <tbody>{summary_rows}</tbody>
+</table>
+</div>
+
+<h2>Detalle Cronológico</h2>
+<div class="filters" id="filters">{filter_btns}</div>
+<div class="tbl-wrap">
+<table id="detail-table">
+  <thead><tr><th>ID</th><th>Timestamp</th><th>Línea</th><th>Mensaje</th><th>Significado</th></tr></thead>
+  <tbody>{detail_rows}</tbody>
+</table>
+</div>
+
+<script>
+function filterTable(id, btn) {{
+  document.querySelectorAll('.fbtn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('#detail-table tbody tr').forEach(tr => {{
+    tr.classList.toggle('hidden', id !== 'all' && tr.dataset.id != id);
+  }});
+}}
+</script>
+</body>
+</html>"""
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html_content)
+    print(f"  HTML exportado: {output_path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+
+    # ── Archivo de log ───────────────────────────────────────────────────────
+    if len(sys.argv) > 1:
+        log_file = sys.argv[1]
+    else:
+        candidates = [f for f in os.listdir(".")
+                      if f.lower().endswith((".docx", ".txt"))
+                      and "lista" not in f.lower()
+                      and "evento" not in f.lower()]
+        if not candidates:
+            print("Uso: python log_analyzer.py <log.docx|.txt> [eventos.xlsx]")
+            sys.exit(1)
+        log_file = candidates[0]
+        print(f"Log detectado automáticamente: {log_file}")
+
+    if not os.path.exists(log_file):
+        print(f"Error: no se encontró '{log_file}'")
+        sys.exit(1)
+
+    # ── Archivo de eventos Excel ─────────────────────────────────────────────
+    if len(sys.argv) > 2:
+        xlsx_file = sys.argv[2]
+    else:
+        # buscar automáticamente cualquier .xlsx en el directorio
+        xlsx_candidates = [f for f in os.listdir(".") if f.lower().endswith(".xlsx")]
+        if not xlsx_candidates:
+            print("Error: no se encontró ningún archivo .xlsx con la lista de eventos.")
+            print("Uso: python log_analyzer.py <log.docx> <eventos.xlsx>")
+            sys.exit(1)
+        xlsx_file = xlsx_candidates[0]
+        print(f"Excel de eventos detectado automáticamente: {xlsx_file}")
+
+    if not os.path.exists(xlsx_file):
+        print(f"Error: no se encontró '{xlsx_file}'")
+        sys.exit(1)
+
+    # ── Ejecutar ─────────────────────────────────────────────────────────────
+    print(f"\nCargando eventos desde: {xlsx_file}")
+    events = load_events_from_xlsx(xlsx_file)
+    print(f"Eventos cargados: {len(events)}")
+
+    print(f"Leyendo log: {log_file}")
+    log_lines = extract_log_lines(log_file)
+    print(f"Líneas extraídas: {len(log_lines)}")
+
+    results = analyze_log(log_lines, events)
+    print_report(results, log_lines)
+
+    export_csv(results)
+    export_html(results, log_file)
