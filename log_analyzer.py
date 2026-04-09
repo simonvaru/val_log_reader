@@ -17,6 +17,10 @@ from collections import defaultdict
 from docx import Document
 from openpyxl import load_workbook
 
+# Forzar UTF-8 en stdout para evitar errores de encoding en Windows
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Lectura de eventos desde Excel
@@ -58,13 +62,13 @@ def load_events_from_xlsx(xlsx_path):
 # Lectura del log
 # ─────────────────────────────────────────────────────────────────────────────
 def extract_log_lines(file_path):
-    """Extrae líneas de texto de un .docx o .txt"""
-    if file_path.lower().endswith(".txt"):
-        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-            return [line.rstrip() for line in f if line.strip()]
-    else:
+    """Extrae líneas de texto de un .docx o archivo de texto plano"""
+    if file_path.lower().endswith(".docx"):
         doc = Document(file_path)
         return [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+    else:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            return [line.rstrip() for line in f if line.strip()]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -200,6 +204,45 @@ def export_csv(results, output_path="eventos_encontrados.csv"):
         writer.writeheader()
         writer.writerows(results)
     print(f"\n  CSV exportado: {output_path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Exportación XLSX
+# ─────────────────────────────────────────────────────────────────────────────
+def export_xlsx(results, output_path="eventos_encontrados.xlsx"):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Eventos"
+
+    headers = ["ID", "Patrón", "Significado", "Timestamp", "Línea Nro", "Mensaje"]
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="1A3A5C")
+
+    for col, h_text in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h_text)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+
+    for row_idx, r in enumerate(results, 2):
+        ws.cell(row=row_idx, column=1, value=r["id"])
+        ws.cell(row=row_idx, column=2, value=r["patron"])
+        ws.cell(row=row_idx, column=3, value=r["significado"])
+        ws.cell(row=row_idx, column=4, value=r["timestamp"])
+        ws.cell(row=row_idx, column=5, value=r["linea_num"])
+        ws.cell(row=row_idx, column=6, value=r["mensaje"])
+
+    # Ajustar ancho de columnas
+    col_widths = [8, 40, 50, 22, 10, 80]
+    for col, width in enumerate(col_widths, 1):
+        ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = width
+
+    os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else ".", exist_ok=True)
+    wb.save(output_path)
+    print(f"  XLSX exportado: {output_path}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -419,8 +462,17 @@ if __name__ == "__main__":
     log_lines = extract_log_lines(log_file)
     print(f"Líneas extraídas: {len(log_lines)}")
 
+    # ── Archivo de salida ───────────────────────────────────────────────────
+    if len(sys.argv) > 3:
+        output_file = sys.argv[3]
+    else:
+        output_file = "reporte_eventos.html"
+
     results = analyze_log(log_lines, events)
     print_report(results, log_lines)
 
     export_csv(results)
-    export_html(results, log_file)
+    if output_file.lower().endswith(".xlsx"):
+        export_xlsx(results, output_file)
+    else:
+        export_html(results, log_file, output_file)
