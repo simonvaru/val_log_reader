@@ -9,20 +9,27 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-# Forzar UTF-8 en stdout
-if hasattr(sys.stdout, "reconfigure"):
+# Forzar UTF-8 en stdout (puede ser None en ejecutables sin consola)
+if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
 def run_analysis(log_file, xlsx_file, output_file, status_var, btn_run, root):
     """Ejecuta el análisis en un hilo separado para no bloquear la GUI."""
+    import tempfile, shutil
+    tmp_xlsx = None
     try:
         # Importar funciones del analizador
         from log_analyzer import load_events_from_xlsx, extract_log_lines, analyze_log, export_html, export_xlsx
 
+        # Copiar el xlsx a un temporal para evitar errno 13 si está abierto en Excel
+        tmp_xlsx = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+        tmp_xlsx.close()
+        shutil.copy2(xlsx_file, tmp_xlsx.name)
+
         status_var.set("Cargando eventos...")
         root.update_idletasks()
-        events = load_events_from_xlsx(xlsx_file)
+        events = load_events_from_xlsx(tmp_xlsx.name)
 
         status_var.set(f"Leyendo log ({os.path.basename(log_file)})...")
         root.update_idletasks()
@@ -53,6 +60,11 @@ def run_analysis(log_file, xlsx_file, output_file, status_var, btn_run, root):
         status_var.set(f"Error: {e}")
         messagebox.showerror("Error", str(e))
     finally:
+        if tmp_xlsx and os.path.exists(tmp_xlsx.name):
+            try:
+                os.remove(tmp_xlsx.name)
+            except Exception:
+                pass
         btn_run.config(state="normal")
 
 
@@ -93,9 +105,17 @@ def main():
 
     # ── Variables ────────────────────────────────────────────────────────────
     log_var    = tk.StringVar()
-    xlsx_var   = tk.StringVar(value="lista_eventos_vl550.xlsx")
     output_var = tk.StringVar()
     status_var = tk.StringVar(value="Listo.")
+
+    # Buscar lista_eventos_vl550.xlsx junto al .exe o junto al script
+    _base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    _default_xlsx = os.path.join(_base, "lista_eventos_vl550.xlsx")
+    # También buscar en el directorio de trabajo actual
+    if not os.path.exists(_default_xlsx):
+        _default_xlsx = os.path.join(os.getcwd(), "lista_eventos_vl550.xlsx")
+    # Si tampoco existe, dejar la ruta para que el usuario la corrija
+    xlsx_var = tk.StringVar(value=_default_xlsx if os.path.exists(_default_xlsx) else "")
 
     # ── Frame principal ───────────────────────────────────────────────────────
     frm = ttk.Frame(root, padding=16)

@@ -17,8 +17,8 @@ from collections import defaultdict
 from docx import Document
 from openpyxl import load_workbook
 
-# Forzar UTF-8 en stdout para evitar errores de encoding en Windows
-if sys.stdout.encoding != 'utf-8':
+# Forzar UTF-8 en stdout (sys.stdout puede ser None en ejecutables sin consola)
+if sys.stdout is not None and hasattr(sys.stdout, 'reconfigure') and sys.stdout.encoding != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 
