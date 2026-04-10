@@ -265,11 +265,25 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
         return f"<span class='badge' style='background:{c}'>{eid}</span>"
 
     # ── Resumen ──────────────────────────────────────────────────────────────
+    def extract_value(patron, mensaje):
+        """Extrae el valor que sigue al patrón en el mensaje."""
+        try:
+            idx = mensaje.lower().find(patron.lower())
+            if idx == -1:
+                return ""
+            after = mensaje[idx + len(patron):].strip()
+            # Tomar hasta el primer separador (coma, punto y coma, salto, corchete)
+            val = re.split(r'[,;\n\[\]{}]', after)[0].strip()
+            return val[:60]  # limitar longitud
+        except Exception:
+            return ""
+
     summary_rows = ""
     for eid in sorted(by_id.keys()):
         sample = by_id[eid][0]
         count  = len(by_id[eid])
         bar_w  = min(count * 18, 200)
+        valor  = extract_value(sample['patron'], sample['mensaje'])
         summary_rows += (
             f"<tr>"
             f"<td class='ctr'>{badge(eid)}</td>"
@@ -278,6 +292,7 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
             f"  <span class='bar-num'>{count}</span></div>"
             f"</td>"
             f"<td class='mono'>{h.escape(sample['patron'])}</td>"
+            f"<td class='mono val'>{h.escape(valor)}</td>"
             f"<td>{h.escape(sample['significado'])}</td>"
             f"</tr>\n"
         )
@@ -348,6 +363,7 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
   .ts    {{ white-space:nowrap; color:#555; }}
   .msg   {{ word-break:break-word; max-width:420px; }}
   .sig   {{ color:#2e4a6e; font-size:.84rem; }}
+  .val   {{ color:#555; font-size:.82rem; max-width:180px; word-break:break-word; }}
   .ctr   {{ text-align:center; }}
 
   /* ── Barra de ocurrencias ── */
@@ -382,7 +398,7 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
 <h2>Resumen por Tipo de Evento</h2>
 <div class="tbl-wrap">
 <table>
-  <thead><tr><th>ID</th><th>Ocurrencias</th><th>Patrón buscado</th><th>Significado</th></tr></thead>
+  <thead><tr><th>ID</th><th>Ocurrencias</th><th>Patrón buscado</th><th>Valor</th><th>Significado</th></tr></thead>
   <tbody>{summary_rows}</tbody>
 </table>
 </div>
