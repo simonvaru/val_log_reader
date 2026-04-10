@@ -487,7 +487,6 @@ if __name__ == "__main__":
     results = analyze_log(log_lines, events)
     print_report(results, log_lines)
 
-    export_csv(results)
     if output_file.lower().endswith(".xlsx"):
         export_xlsx(results, output_file)
     else:
