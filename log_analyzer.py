@@ -326,12 +326,15 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
         )
 
     # ── Detalle ──────────────────────────────────────────────────────────────
+    multi_source = any(r.get("_source") for r in results)
     detail_rows = ""
     for r in results:
         valor = extract_value(r['id'], r['mensaje'])
+        source_td = f"<td class='src'>{h.escape(r.get('_source',''))}</td>" if multi_source else ""
         detail_rows += (
             f"<tr data-id='{r['id']}'>"
             f"<td class='ctr'>{badge(r['id'])}</td>"
+            f"{source_td}"
             f"<td class='mono ts'>{h.escape(r['timestamp'])}</td>"
             f"<td class='ctr'>{r['linea_num']}</td>"
             f"<td class='mono msg'>{h.escape(r['mensaje'])}</td>"
@@ -339,6 +342,7 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
             f"<td class='sig'>{h.escape(r['significado'])}</td>"
             f"</tr>\n"
         )
+    source_th = "<th>Fuente</th>" if multi_source else ""
 
     # ── Opciones de filtro por ID ─────────────────────────────────────────────
     filter_btns = "<button class='fbtn active' onclick=\"filterTable('all',this)\">Todos</button>\n"
@@ -394,6 +398,7 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
   .msg   {{ word-break:break-word; max-width:420px; }}
   .sig   {{ color:#2e4a6e; font-size:.84rem; }}
   .val   {{ color:#555; font-size:.82rem; max-width:180px; word-break:break-word; }}
+  .src   {{ font-size:.78rem; color:#888; white-space:nowrap; font-family:Consolas,'Courier New',monospace; }}
   .ctr   {{ text-align:center; }}
 
   /* ── Barra de ocurrencias ── */
@@ -466,7 +471,7 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
 </div>
 <div class="tbl-wrap">
 <table id="detail-table">
-  <thead><tr><th>ID</th><th>Timestamp</th><th>Línea</th><th>Mensaje</th><th>Valor</th><th>Significado</th></tr></thead>
+  <thead><tr><th>ID</th>{source_th}<th>Timestamp</th><th>Línea</th><th>Mensaje</th><th>Valor</th><th>Significado</th></tr></thead>
   <tbody>{detail_rows}</tbody>
 </table>
 </div>

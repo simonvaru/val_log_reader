@@ -1,5 +1,5 @@
 """
-GUI para log_analyzer.py
+GUI para log_analyzer.py — soporta múltiples logs en un solo reporte
 Uso: python log_analyzer_gui.py
 """
 
@@ -14,15 +14,15 @@ if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
-def run_analysis(log_file, xlsx_file, output_file, status_var, btn_run, root):
-    """Ejecuta el análisis en un hilo separado para no bloquear la GUI."""
+def run_analysis(log_files, xlsx_file, output_file, status_var, btn_run, root):
+    """Ejecuta el análisis sobre múltiples logs y genera un único reporte."""
     import tempfile, shutil
     tmp_xlsx = None
     try:
-        # Importar funciones del analizador
-        from log_analyzer import load_events_from_xlsx, extract_log_lines, analyze_log, export_html, export_xlsx
+        from log_analyzer import (load_events_from_xlsx, extract_log_lines,
+                                   analyze_log, export_html, export_xlsx)
 
-        # Copiar el xlsx a un temporal para evitar errno 13 si está abierto en Excel
+        # Copiar xlsx a temporal para evitar errno 13 si está abierto en Excel
         tmp_xlsx = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
         tmp_xlsx.close()
         shutil.copy2(xlsx_file, tmp_xlsx.name)
@@ -31,29 +31,42 @@ def run_analysis(log_file, xlsx_file, output_file, status_var, btn_run, root):
         root.update_idletasks()
         events = load_events_from_xlsx(tmp_xlsx.name)
 
-        status_var.set(f"Leyendo log ({os.path.basename(log_file)})...")
-        root.update_idletasks()
-        log_lines = extract_log_lines(log_file)
+        all_results   = []
+        total_lines   = 0
+        log_label     = ", ".join(os.path.basename(f) for f in log_files)
 
-        status_var.set("Analizando...")
-        root.update_idletasks()
-        results = analyze_log(log_lines, events)
+        for i, lf in enumerate(log_files, 1):
+            status_var.set(f"Leyendo log {i}/{len(log_files)}: {os.path.basename(lf)}…")
+            root.update_idletasks()
+            lines = extract_log_lines(lf)
+            total_lines += len(lines)
+
+            status_var.set(f"Analizando {i}/{len(log_files)}: {os.path.basename(lf)}…")
+            root.update_idletasks()
+            results = analyze_log(lines, events)
+
+            # Anotar de qué archivo proviene cada resultado
+            for r in results:
+                r["_source"] = os.path.basename(lf)
+            all_results.extend(results)
 
         status_var.set("Exportando reporte...")
         root.update_idletasks()
 
         if output_file.lower().endswith(".xlsx"):
-            export_xlsx(results, output_file)
+            export_xlsx(all_results, output_file)
         else:
-            export_html(results, log_file, output_file)
+            export_html(all_results, log_label, output_file)
 
         status_var.set(
-            f"Listo. {len(results)} ocurrencias en {len(log_lines)} líneas."
+            f"Listo. {len(all_results)} ocurrencias en {total_lines} líneas "
+            f"({len(log_files)} log(s))."
         )
         messagebox.showinfo(
             "Análisis completado",
-            f"Ocurrencias encontradas: {len(results)}\n"
-            f"Líneas procesadas: {len(log_lines)}\n\n"
+            f"Logs analizados: {len(log_files)}\n"
+            f"Ocurrencias encontradas: {len(all_results)}\n"
+            f"Líneas procesadas: {total_lines}\n\n"
             f"Reporte guardado en:\n{output_file}",
         )
     except Exception as e:
@@ -66,15 +79,6 @@ def run_analysis(log_file, xlsx_file, output_file, status_var, btn_run, root):
             except Exception:
                 pass
         btn_run.config(state="normal")
-
-
-def browse_log(var):
-    path = filedialog.askopenfilename(
-        title="Seleccionar archivo de log",
-        filetypes=[("Todos los archivos", "*.*"), ("Texto", "*.txt"), ("Log", "*.log")],
-    )
-    if path:
-        var.set(path)
 
 
 def browse_xlsx(var):
@@ -99,39 +103,74 @@ def browse_output(var):
 def main():
     root = tk.Tk()
     root.title("Log Analyzer VL550")
-    root.resizable(False, False)
+    root.resizable(True, True)
 
-    pad = {"padx": 10, "pady": 6}
+    pad = {"padx": 10, "pady": 5}
 
-    # ── Variables ────────────────────────────────────────────────────────────
-    log_var    = tk.StringVar()
+    # ── Variables ─────────────────────────────────────────────────────────────
     output_var = tk.StringVar()
     status_var = tk.StringVar(value="Listo.")
 
-    # Buscar lista_eventos_vl550.xlsx junto al .exe o junto al script
     _base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     _default_xlsx = os.path.join(_base, "lista_eventos_vl550.xlsx")
-    # También buscar en el directorio de trabajo actual
     if not os.path.exists(_default_xlsx):
         _default_xlsx = os.path.join(os.getcwd(), "lista_eventos_vl550.xlsx")
-    # Si tampoco existe, dejar la ruta para que el usuario la corrija
     xlsx_var = tk.StringVar(value=_default_xlsx if os.path.exists(_default_xlsx) else "")
 
     # ── Frame principal ───────────────────────────────────────────────────────
     frm = ttk.Frame(root, padding=16)
     frm.grid(row=0, column=0, sticky="nsew")
+    root.columnconfigure(0, weight=1)
+    root.rowconfigure(0, weight=1)
+    frm.columnconfigure(1, weight=1)
 
     # Título
-    ttk.Label(frm, text="Log Analyzer — VL550 / CGI", font=("Segoe UI", 12, "bold")).grid(
-        row=0, column=0, columnspan=3, pady=(0, 14), sticky="w"
+    ttk.Label(frm, text="Log Analyzer — VL550 / CGI",
+              font=("Segoe UI", 12, "bold")).grid(
+        row=0, column=0, columnspan=3, pady=(0, 12), sticky="w"
     )
 
-    # ── Archivo de log ────────────────────────────────────────────────────────
-    ttk.Label(frm, text="Archivo de log:").grid(row=1, column=0, sticky="w", **pad)
-    ttk.Entry(frm, textvariable=log_var, width=52).grid(row=1, column=1, sticky="ew", **pad)
-    ttk.Button(frm, text="Examinar…", command=lambda: browse_log(log_var)).grid(
-        row=1, column=2, **pad
-    )
+    # ── Lista de logs ─────────────────────────────────────────────────────────
+    ttk.Label(frm, text="Archivos de log:").grid(row=1, column=0, sticky="nw", **pad)
+
+    list_frame = ttk.Frame(frm)
+    list_frame.grid(row=1, column=1, sticky="nsew", **pad)
+    list_frame.columnconfigure(0, weight=1)
+    frm.rowconfigure(1, weight=1)
+
+    log_listbox = tk.Listbox(list_frame, height=6, selectmode=tk.EXTENDED,
+                              font=("Consolas", 9), activestyle="dotbox")
+    log_listbox.grid(row=0, column=0, sticky="nsew")
+
+    sb = ttk.Scrollbar(list_frame, orient="vertical", command=log_listbox.yview)
+    sb.grid(row=0, column=1, sticky="ns")
+    log_listbox.configure(yscrollcommand=sb.set)
+
+    # Botones de la lista
+    btn_frame = ttk.Frame(frm)
+    btn_frame.grid(row=1, column=2, sticky="n", padx=(0, 10), pady=5)
+
+    def add_logs():
+        paths = filedialog.askopenfilenames(
+            title="Agregar archivos de log",
+            filetypes=[("Todos los archivos", "*.*"),
+                       ("Texto", "*.txt"), ("Log", "*.log")],
+        )
+        existing = list(log_listbox.get(0, tk.END))
+        for p in paths:
+            if p not in existing:
+                log_listbox.insert(tk.END, p)
+
+    def remove_selected():
+        for i in reversed(log_listbox.curselection()):
+            log_listbox.delete(i)
+
+    def clear_list():
+        log_listbox.delete(0, tk.END)
+
+    ttk.Button(btn_frame, text="➕ Agregar", width=12, command=add_logs).pack(pady=2)
+    ttk.Button(btn_frame, text="➖ Quitar",  width=12, command=remove_selected).pack(pady=2)
+    ttk.Button(btn_frame, text="🗑 Limpiar", width=12, command=clear_list).pack(pady=2)
 
     # ── Base de eventos ───────────────────────────────────────────────────────
     ttk.Label(frm, text="Base de eventos (.xlsx):").grid(row=2, column=0, sticky="w", **pad)
@@ -146,9 +185,10 @@ def main():
     ttk.Button(frm, text="Guardar como…", command=lambda: browse_output(output_var)).grid(
         row=3, column=2, **pad
     )
-
-    ttk.Label(frm, text="(extensión .html o .xlsx determina el formato)", foreground="#666",
-              font=("Segoe UI", 8)).grid(row=4, column=1, sticky="w", padx=10)
+    ttk.Label(frm, text="(extensión .html o .xlsx determina el formato)",
+              foreground="#666", font=("Segoe UI", 8)).grid(
+        row=4, column=1, sticky="w", padx=10
+    )
 
     # ── Separador ─────────────────────────────────────────────────────────────
     ttk.Separator(frm, orient="horizontal").grid(
@@ -156,18 +196,19 @@ def main():
     )
 
     # ── Botón Analizar ────────────────────────────────────────────────────────
-    btn_run = ttk.Button(frm, text="▶  Analizar", style="Accent.TButton")
+    btn_run = ttk.Button(frm, text="▶  Analizar")
 
     def on_run():
-        log_file    = log_var.get().strip()
+        log_files   = list(log_listbox.get(0, tk.END))
         xlsx_file   = xlsx_var.get().strip()
         output_file = output_var.get().strip()
 
-        if not log_file:
-            messagebox.showwarning("Falta dato", "Seleccioná el archivo de log.")
+        if not log_files:
+            messagebox.showwarning("Falta dato", "Agregá al menos un archivo de log.")
             return
-        if not os.path.exists(log_file):
-            messagebox.showerror("Error", f"No se encontró el log:\n{log_file}")
+        missing = [f for f in log_files if not os.path.exists(f)]
+        if missing:
+            messagebox.showerror("Error", "No se encontraron:\n" + "\n".join(missing))
             return
         if not xlsx_file:
             messagebox.showwarning("Falta dato", "Seleccioná la base de eventos (.xlsx).")
@@ -183,7 +224,7 @@ def main():
         status_var.set("Procesando…")
         threading.Thread(
             target=run_analysis,
-            args=(log_file, xlsx_file, output_file, status_var, btn_run, root),
+            args=(log_files, xlsx_file, output_file, status_var, btn_run, root),
             daemon=True,
         ).start()
 
@@ -196,7 +237,7 @@ def main():
     )
     ttk.Label(frm, textvariable=status_var, foreground="#444",
               font=("Segoe UI", 8)).grid(
-        row=8, column=0, columnspan=3, sticky="w", padx=10, pady=(4, 0)
+        row=8, column=0, columnspan=3, sticky="w", padx=10, pady=(4, 2)
     )
 
     root.mainloop()
