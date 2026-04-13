@@ -264,17 +264,45 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
         c = id_color.get(eid, "#555")
         return f"<span class='badge' style='background:{c}'>{eid}</span>"
 
-    # ── Resumen ──────────────────────────────────────────────────────────────
-    def extract_value(patron, mensaje):
-        """Extrae el valor que sigue al patrón en el mensaje."""
+    # ── Extracción de valor por ID ────────────────────────────────────────────
+    # Cada entrada: id -> patrón regex con un grupo de captura
+    _VALUE_PATTERNS = {
+        3:  r'Tarjeta Mifare detectada\.\s*UID=(\S+)',
+        7:  r'COMPANY:\s*(\S+)',
+        10: r'ulLastFour:\s*(\S+)',
+        11: r'"serial_number"\s*:\s*"([^"]+)"',
+        12: r'appVersion\s*=\s*(v[\d\.\-k]+)',
+        14: r'QR Record serialNumber:\s*(\S+)',
+        20: r'FARE:\s*(\S+)',
+        22: r't\.counter:(\S+)',
+        23: r'CONTADOR_BOLETOS,\s*Value:\s*(\S+)',
+        26: r'merchantName:\s*(.+)',
+        27: r'driver\s*=\s*(\S+)',
+        28: r'Name:\s*EVENTS_NUMBER,\s*Value:\s*(\S+)',
+        29: r'"versionFW"\s*:\s*"(v[^"]+)"',
+        34: r'Name:\s*SERVICE_ID,\s*Value:\s*(\S+)',
+        39: r'Tabla:RL\s+id:9\s+currVersion:(\S+)',
+        40: r'Tabla:AL\s+id:11\s+currVersion:(\S+)',
+        41: r'Tabla:CO\s+id:3\s+currVersion:(\S+)',
+        42: r'Tabla:CD\s+id:15\s+currVersion:(\S+)',
+        43: r'Tabla:LR\s+id:23\s+currVersion:(\S+)',
+        44: r'Tabla:RS\s+id:16\s+currVersion:(\S+)',
+        45: r'Tabla:GP\s+id:1\s+currVersion:(\S+)',
+        46: r'Tabla:SG\s+id:20\s+currVersion:(\S+)',
+        47: r'Tabla:LI\s+id:18\s+currVersion:(\S+)',
+        48: r'Tabla:OL\s+id:10\s+currVersion:(\S+)',
+    }
+    _compiled_value = {eid: re.compile(pat, re.IGNORECASE)
+                       for eid, pat in _VALUE_PATTERNS.items()}
+
+    def extract_value(eid, mensaje):
+        """Extrae el valor de interés según el ID del evento."""
+        pat = _compiled_value.get(eid)
+        if pat is None:
+            return ""
         try:
-            idx = mensaje.lower().find(patron.lower())
-            if idx == -1:
-                return ""
-            after = mensaje[idx + len(patron):].strip()
-            # Tomar hasta el primer separador (coma, punto y coma, salto, corchete)
-            val = re.split(r'[,;\n\[\]{}]', after)[0].strip()
-            return val[:60]  # limitar longitud
+            m = pat.search(mensaje)
+            return m.group(1).strip()[:80] if m else ""
         except Exception:
             return ""
 
@@ -283,7 +311,7 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
         sample = by_id[eid][0]
         count  = len(by_id[eid])
         bar_w  = min(count * 18, 200)
-        valor  = extract_value(sample['patron'], sample['mensaje'])
+        valor  = extract_value(eid, sample['mensaje'])
         summary_rows += (
             f"<tr>"
             f"<td class='ctr'>{badge(eid)}</td>"
@@ -300,7 +328,7 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
     # ── Detalle ──────────────────────────────────────────────────────────────
     detail_rows = ""
     for r in results:
-        valor = extract_value(r['patron'], r['mensaje'])
+        valor = extract_value(r['id'], r['mensaje'])
         detail_rows += (
             f"<tr data-id='{r['id']}'>"
             f"<td class='ctr'>{badge(r['id'])}</td>"
