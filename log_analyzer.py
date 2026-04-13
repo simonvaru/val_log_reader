@@ -300,12 +300,14 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
     # ── Detalle ──────────────────────────────────────────────────────────────
     detail_rows = ""
     for r in results:
+        valor = extract_value(r['patron'], r['mensaje'])
         detail_rows += (
             f"<tr data-id='{r['id']}'>"
             f"<td class='ctr'>{badge(r['id'])}</td>"
             f"<td class='mono ts'>{h.escape(r['timestamp'])}</td>"
             f"<td class='ctr'>{r['linea_num']}</td>"
             f"<td class='mono msg'>{h.escape(r['mensaje'])}</td>"
+            f"<td class='mono val'>{h.escape(valor)}</td>"
             f"<td class='sig'>{h.escape(r['significado'])}</td>"
             f"</tr>\n"
         )
@@ -371,13 +373,28 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
   .bar      {{ height:10px; border-radius:5px; min-width:4px; }}
   .bar-num  {{ font-weight:700; font-size:.85rem; color:#333; }}
 
-  /* ── Filtros ── */
+  /* ── Filtros por ID ── */
   .filters {{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }}
   .fbtn    {{ padding:5px 12px; border-radius:16px; border:2px solid var(--bc,#1a6fa8);
               background:#fff; color:var(--bc,#1a6fa8); font-size:.8rem; font-weight:600;
               cursor:pointer; transition:all .15s; }}
   .fbtn:hover, .fbtn.active {{ background:var(--bc,#1a6fa8); color:#fff; }}
   .fcnt  {{ font-weight:400; opacity:.85; }}
+
+  /* ── Barra de búsqueda ── */
+  .search-bar {{ display:flex; align-items:center; gap:10px; margin-bottom:10px;
+                 background:#fff; border:1px solid #c8d0e0; border-radius:8px;
+                 padding:6px 14px; box-shadow:0 1px 3px rgba(0,0,0,.07); }}
+  .search-bar input {{ border:none; outline:none; font-size:.88rem; flex:1;
+                       font-family:Consolas,'Courier New',monospace; color:#222; }}
+  .search-bar label {{ font-size:.78rem; color:#666; white-space:nowrap; }}
+  .search-bar select {{ border:1px solid #c8d0e0; border-radius:4px; font-size:.8rem;
+                        padding:2px 6px; color:#333; background:#f7f9fc; cursor:pointer; }}
+  .search-bar .s-count {{ font-size:.78rem; color:#888; white-space:nowrap; }}
+  .search-bar button {{ border:none; background:none; cursor:pointer; color:#888;
+                        font-size:1rem; padding:0 4px; }}
+  .search-bar button:hover {{ color:#c62828; }}
+  mark {{ background:#fff176; border-radius:2px; padding:0 1px; }}
 </style>
 </head>
 <body>
@@ -405,20 +422,92 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
 
 <h2>Detalle Cronológico</h2>
 <div class="filters" id="filters">{filter_btns}</div>
+<div class="search-bar">
+  <span>🔍</span>
+  <input type="text" id="search-input" placeholder="Buscar en Timestamp, Línea, Mensaje o Valor…" oninput="applySearch()">
+  <label for="search-col">en:</label>
+  <select id="search-col" onchange="applySearch()">
+    <option value="all">Todos los campos</option>
+    <option value="1">Timestamp</option>
+    <option value="2">Línea</option>
+    <option value="3">Mensaje</option>
+    <option value="4">Valor</option>
+  </select>
+  <span class="s-count" id="search-count"></span>
+  <button onclick="clearSearch()" title="Limpiar búsqueda">✕</button>
+</div>
 <div class="tbl-wrap">
 <table id="detail-table">
-  <thead><tr><th>ID</th><th>Timestamp</th><th>Línea</th><th>Mensaje</th><th>Significado</th></tr></thead>
+  <thead><tr><th>ID</th><th>Timestamp</th><th>Línea</th><th>Mensaje</th><th>Valor</th><th>Significado</th></tr></thead>
   <tbody>{detail_rows}</tbody>
 </table>
 </div>
 
 <script>
+var _activeId = 'all';
+
 function filterTable(id, btn) {{
   document.querySelectorAll('.fbtn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  document.querySelectorAll('#detail-table tbody tr').forEach(tr => {{
-    tr.classList.toggle('hidden', id !== 'all' && tr.dataset.id != id);
+  _activeId = id;
+  applySearch();
+}}
+
+function applySearch() {{
+  var term = document.getElementById('search-input').value.trim().toLowerCase();
+  var col  = document.getElementById('search-col').value;
+  var rows = document.querySelectorAll('#detail-table tbody tr');
+  var visible = 0;
+
+  rows.forEach(function(tr) {{
+    // Filtro por ID
+    var idMatch = (_activeId === 'all' || tr.dataset.id == _activeId);
+
+    // Filtro por búsqueda
+    var searchMatch = true;
+    if (term) {{
+      var cells = tr.querySelectorAll('td');
+      // col indices: 1=Timestamp, 2=Línea, 3=Mensaje, 4=Valor
+      var targets = col === 'all' ? [1,2,3,4] : [parseInt(col)];
+      searchMatch = targets.some(function(i) {{
+        return cells[i] && cells[i].textContent.toLowerCase().includes(term);
+      }});
+    }}
+
+    var show = idMatch && searchMatch;
+    tr.classList.toggle('hidden', !show);
+    if (show) visible++;
+
+    // Highlight
+    [1,2,3,4].forEach(function(i) {{
+      if (!tr.classList.contains('hidden') && term && (col === 'all' || parseInt(col) === i)) {{
+        var cell = tr.querySelectorAll('td')[i];
+        if (cell) cell.innerHTML = highlight(cell.textContent, term);
+      }} else if (tr.querySelectorAll('td')[i]) {{
+        var cell = tr.querySelectorAll('td')[i];
+        if (cell.querySelector('mark')) cell.textContent = cell.textContent;
+      }}
+    }});
   }});
+
+  var total = Array.from(rows).filter(r => !r.classList.contains('hidden')).length;
+  document.getElementById('search-count').textContent = term ? total + ' resultado(s)' : '';
+}}
+
+function highlight(text, term) {{
+  if (!term) return escHtml(text);
+  var re = new RegExp('(' + term.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&') + ')', 'gi');
+  return escHtml(text).replace(re, '<mark>$1</mark>');
+}}
+
+function escHtml(s) {{
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}}
+
+function clearSearch() {{
+  document.getElementById('search-input').value = '';
+  document.getElementById('search-count').textContent = '';
+  applySearch();
 }}
 </script>
 </body>
