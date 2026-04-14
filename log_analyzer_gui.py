@@ -97,9 +97,11 @@ def browse_xlsx(var):
         var.set(path)
 
 
-def browse_output(var):
+def browse_output(var, exe_dir=None):
+    _reports_dir = os.path.join(exe_dir or os.getcwd(), "reportes_html")
     path = filedialog.asksaveasfilename(
         title="Guardar reporte como...",
+        initialdir=_reports_dir if os.path.isdir(_reports_dir) else (exe_dir or ""),
         defaultextension=".html",
         filetypes=[("HTML", "*.html"), ("Excel", "*.xlsx")],
     )
@@ -194,6 +196,12 @@ def main():
     status_var = tk.StringVar(value="Listo.")
 
     _base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    # Directorio real del exe (o del .py si se corre sin empaquetar)
+    if getattr(sys, "frozen", False):
+        _exe_dir = os.path.dirname(os.path.dirname(sys.executable))  # sube de dist/ al proyecto
+    else:
+        _exe_dir = os.path.dirname(os.path.abspath(__file__))
+
     _default_xlsx = os.path.join(_base, "lista_eventos_vl550.xlsx")
     if not os.path.exists(_default_xlsx):
         _default_xlsx = os.path.join(os.getcwd(), "lista_eventos_vl550.xlsx")
@@ -233,8 +241,10 @@ def main():
     btn_frame.grid(row=1, column=2, sticky="n", padx=(0, 10), pady=5)
 
     def add_logs():
+        _logs_dir = os.path.join(_exe_dir, "logs")
         paths = filedialog.askopenfilenames(
             title="Agregar archivos de log",
+            initialdir=_logs_dir if os.path.isdir(_logs_dir) else _exe_dir,
             filetypes=[("Todos los archivos", "*.*"),
                        ("Texto", "*.txt"), ("Log", "*.log")],
         )
@@ -264,7 +274,7 @@ def main():
     # ── Archivo de salida ─────────────────────────────────────────────────────
     ttk.Label(frm, text="Guardar reporte en:").grid(row=3, column=0, sticky="w", **pad)
     ttk.Entry(frm, textvariable=output_var, width=52).grid(row=3, column=1, sticky="ew", **pad)
-    ttk.Button(frm, text="Guardar como…", command=lambda: browse_output(output_var)).grid(
+    ttk.Button(frm, text="Guardar como…", command=lambda: browse_output(output_var, _exe_dir)).grid(
         row=3, column=2, **pad
     )
     ttk.Label(frm, text="(extensión .html o .xlsx determina el formato)",
