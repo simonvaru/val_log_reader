@@ -14,7 +14,8 @@ if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
-def run_analysis(log_files, xlsx_file, output_file, status_var, btn_run, root):
+def run_analysis(log_files, xlsx_file, output_file, status_var, btn_run, root,
+                 api_state=None):
     """Ejecuta el análisis sobre múltiples logs y genera un único reporte."""
     import tempfile, shutil
     tmp_xlsx = None
@@ -69,6 +70,12 @@ def run_analysis(log_files, xlsx_file, output_file, status_var, btn_run, root):
             f"Líneas procesadas: {total_lines}\n\n"
             f"Reporte guardado en:\n{output_file}",
         )
+        # Acumular métricas para el reporte API
+        if api_state and api_state.get("running"):
+            api_state["analyses_count"] += 1
+            api_state["total_logs"] += len(log_files)
+            api_state["total_lines"] += total_lines
+            api_state["total_occurrences"] += len(all_results)
     except Exception as e:
         status_var.set(f"Error: {e}")
         messagebox.showerror("Error", str(e))
@@ -101,9 +108,84 @@ def browse_output(var):
 
 
 def main():
+    from api_tracker import _now_utc, report_session
+
     root = tk.Tk()
     root.title("Log Analyzer VL550")
     root.resizable(True, True)
+
+    # ── Estado del tracking API ───────────────────────────────────────────────
+    api_state = {
+        "running": False,
+        "start_time": None,
+        "analyses_count": 0,        # cuántos análisis se corrieron
+        "total_logs": 0,            # cuántos archivos de log procesados
+        "total_lines": 0,           # líneas totales procesadas
+        "total_occurrences": 0,     # ocurrencias encontradas
+    }
+
+    def toggle_api():
+        if not api_state["running"]:
+            # Iniciar tracking
+            api_state["running"] = True
+            api_state["start_time"] = _now_utc()
+            api_state["analyses_count"] = 0
+            api_state["total_logs"] = 0
+            api_state["total_lines"] = 0
+            api_state["total_occurrences"] = 0
+            btn_api.config(text="⏹  Detener API", style="ApiStop.TButton")
+            api_status_var.set(f"🟢 API activa desde {api_state['start_time'][:19]}")
+            status_var.set("API tracking iniciado.")
+        else:
+            # Detener y reportar
+            end_time = _now_utc()
+            details = {
+                "analisis_ejecutados": api_state["analyses_count"],
+                "logs_procesados": api_state["total_logs"],
+                "lineas_analizadas": api_state["total_lines"],
+                "ocurrencias_encontradas": api_state["total_occurrences"],
+            }
+            api_state["running"] = False
+            ok, info = report_session(
+                api_state["start_time"], end_time,
+                status="success",
+                records=api_state["total_lines"],
+                details=details,
+            )
+            api_state["start_time"] = None
+            btn_api.config(text="▶  Iniciar API", style="ApiStart.TButton")
+            api_status_var.set("⚪ API inactiva")
+            if ok:
+                status_var.set(
+                    f"API reportada (HTTP {info}): "
+                    f"{details['analisis_ejecutados']} análisis, "
+                    f"{details['logs_procesados']} logs, "
+                    f"{details['lineas_analizadas']} líneas."
+                )
+            else:
+                status_var.set(f"Error al reportar API: {info}")
+
+    def on_close():
+        # Si el tracking está activo al cerrar, reportar automáticamente
+        if api_state["running"]:
+            end_time = _now_utc()
+            details = {
+                "analisis_ejecutados": api_state["analyses_count"],
+                "logs_procesados": api_state["total_logs"],
+                "lineas_analizadas": api_state["total_lines"],
+                "ocurrencias_encontradas": api_state["total_occurrences"],
+            }
+            try:
+                report_session(
+                    api_state["start_time"], end_time,
+                    status="success", records=api_state["total_lines"],
+                    details=details,
+                )
+            except Exception:
+                pass
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_close)
 
     pad = {"padx": 10, "pady": 5}
 
@@ -195,6 +277,28 @@ def main():
         row=5, column=0, columnspan=3, sticky="ew", pady=10
     )
 
+    # ── Botón API tracking ────────────────────────────────────────────────────
+    api_status_var = tk.StringVar(value="⚪ API inactiva")
+
+    style = ttk.Style()
+    style.configure("ApiStart.TButton", foreground="green")
+    style.configure("ApiStop.TButton", foreground="red")
+
+    api_frame = ttk.Frame(frm)
+    api_frame.grid(row=6, column=0, columnspan=3, pady=(0, 4))
+
+    btn_api = ttk.Button(api_frame, text="▶  Iniciar API", width=18,
+                         style="ApiStart.TButton", command=toggle_api)
+    btn_api.pack(side="left", padx=(0, 10))
+
+    ttk.Label(api_frame, textvariable=api_status_var,
+              font=("Segoe UI", 9)).pack(side="left")
+
+    # ── Separador ─────────────────────────────────────────────────────────────
+    ttk.Separator(frm, orient="horizontal").grid(
+        row=7, column=0, columnspan=3, sticky="ew", pady=6
+    )
+
     # ── Botón Analizar ────────────────────────────────────────────────────────
     btn_run = ttk.Button(frm, text="▶  Analizar")
 
@@ -224,20 +328,21 @@ def main():
         status_var.set("Procesando…")
         threading.Thread(
             target=run_analysis,
-            args=(log_files, xlsx_file, output_file, status_var, btn_run, root),
+            args=(log_files, xlsx_file, output_file, status_var, btn_run, root,
+                  api_state),
             daemon=True,
         ).start()
 
     btn_run.config(command=on_run)
-    btn_run.grid(row=6, column=0, columnspan=3, pady=(4, 10))
+    btn_run.grid(row=8, column=0, columnspan=3, pady=(4, 10))
 
     # ── Barra de estado ───────────────────────────────────────────────────────
     ttk.Separator(frm, orient="horizontal").grid(
-        row=7, column=0, columnspan=3, sticky="ew"
+        row=9, column=0, columnspan=3, sticky="ew"
     )
     ttk.Label(frm, textvariable=status_var, foreground="#444",
               font=("Segoe UI", 8)).grid(
-        row=8, column=0, columnspan=3, sticky="w", padx=10, pady=(4, 2)
+        row=10, column=0, columnspan=3, sticky="w", padx=10, pady=(4, 2)
     )
 
     root.mainloop()
