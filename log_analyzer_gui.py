@@ -14,6 +14,73 @@ if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
+def _show_done_dialog(parent, output_file, n_logs, n_results, n_lines):
+    """Ventana de éxito con botones Abrir reporte / Abrir carpeta."""
+    import subprocess
+
+    dlg = tk.Toplevel(parent)
+    dlg.title("Análisis completado")
+    dlg.resizable(False, False)
+    dlg.grab_set()
+
+    frm = ttk.Frame(dlg, padding=20)
+    frm.pack()
+
+    # Ícono: pulgar arriba sobre fondo verde
+    icon_frame = tk.Frame(frm, bg="#27ae60", width=48, height=48)
+    icon_frame.pack_propagate(False)
+    icon_frame.pack(pady=(0, 10))
+    tk.Label(icon_frame, text="👍", font=("Segoe UI Emoji", 20),
+             bg="#27ae60", fg="white").place(relx=0.5, rely=0.5, anchor="center")
+
+    # Mensaje
+    msg = (
+        f"Logs analizados: {n_logs}\n"
+        f"Ocurrencias encontradas: {n_results}\n"
+        f"Líneas procesadas: {n_lines}\n\n"
+        f"Reporte guardado en:\n{output_file}"
+    )
+    ttk.Label(frm, text=msg, justify="center",
+              font=("Segoe UI", 9)).pack(pady=(0, 14))
+
+    # Botones
+    btn_frame = ttk.Frame(frm)
+    btn_frame.pack()
+
+    def open_report():
+        try:
+            os.startfile(output_file)
+        except Exception:
+            pass
+
+    def open_folder():
+        folder = os.path.dirname(os.path.abspath(output_file))
+        try:
+            subprocess.Popen(f'explorer /select,"{os.path.abspath(output_file)}"')
+        except Exception:
+            os.startfile(folder)
+
+    ttk.Button(btn_frame, text="📄 Abrir reporte", width=18,
+               command=open_report).pack(side="left", padx=4)
+    ttk.Button(btn_frame, text="📂 Abrir carpeta", width=18,
+               command=open_folder).pack(side="left", padx=4)
+    ttk.Button(btn_frame, text="Cerrar", width=10,
+               command=dlg.destroy).pack(side="left", padx=4)
+
+    # Centrar sobre la ventana padre
+    dlg.update_idletasks()
+    x = parent.winfo_x() + (parent.winfo_width() - dlg.winfo_width()) // 2
+    y = parent.winfo_y() + (parent.winfo_height() - dlg.winfo_height()) // 2
+    dlg.geometry(f"+{x}+{y}")
+
+    # Sonido alegre
+    try:
+        import winsound
+        winsound.PlaySound("SystemExclamation", winsound.SND_ALIAS | winsound.SND_ASYNC)
+    except Exception:
+        pass
+
+
 def run_analysis(log_files, xlsx_file, output_file, status_var, btn_run, root,
                  api_state=None):
     """Ejecuta el análisis sobre múltiples logs y genera un único reporte."""
@@ -63,13 +130,7 @@ def run_analysis(log_files, xlsx_file, output_file, status_var, btn_run, root,
             f"Listo. {len(all_results)} ocurrencias en {total_lines} líneas "
             f"({len(log_files)} log(s))."
         )
-        messagebox.showinfo(
-            "Análisis completado",
-            f"Logs analizados: {len(log_files)}\n"
-            f"Ocurrencias encontradas: {len(all_results)}\n"
-            f"Líneas procesadas: {total_lines}\n\n"
-            f"Reporte guardado en:\n{output_file}",
-        )
+        _show_done_dialog(root, output_file, len(log_files), len(all_results), total_lines)
         # Acumular métricas para el reporte API
         if api_state and api_state.get("running"):
             api_state["analyses_count"] += 1
