@@ -282,7 +282,7 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
         29: r'"versionFW"\s*:\s*"(v[^"]+)"',
         34: r'Name:\s*SERVICE_ID,\s*Value:\s*(\S+)',
         39: r'Tabla:RL\s+id:9\s+currVersion:(\S+)',
-        40: r'Tabla:AL\s+id:11\s+currVersion:(\S+)',
+        40: r'Estado del validador:\s*(\d+)',
         41: r'Tabla:CO\s+id:3\s+currVersion:(\S+)',
         42: r'Tabla:CD\s+id:15\s+currVersion:(\S+)',
         43: r'Tabla:LR\s+id:23\s+currVersion:(\S+)',
