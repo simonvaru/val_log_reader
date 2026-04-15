@@ -1,5 +1,5 @@
 """
-GUI para log_analyzer.py
+GUI para log_analyzer.py — soporta múltiples logs en un solo reporte
 Uso: python log_analyzer_gui.py
 """
 
@@ -14,15 +14,83 @@ if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
-def run_analysis(log_file, xlsx_file, output_file, status_var, btn_run, root):
-    """Ejecuta el análisis en un hilo separado para no bloquear la GUI."""
+def _show_done_dialog(parent, output_file, n_logs, n_results, n_lines):
+    """Ventana de éxito con botones Abrir reporte / Abrir carpeta."""
+    import subprocess
+
+    dlg = tk.Toplevel(parent)
+    dlg.title("Análisis completado")
+    dlg.resizable(False, False)
+    dlg.grab_set()
+
+    frm = ttk.Frame(dlg, padding=20)
+    frm.pack()
+
+    # Ícono: pulgar arriba sobre fondo verde
+    icon_frame = tk.Frame(frm, bg="#27ae60", width=48, height=48)
+    icon_frame.pack_propagate(False)
+    icon_frame.pack(pady=(0, 10))
+    tk.Label(icon_frame, text="👍", font=("Segoe UI Emoji", 20),
+             bg="#27ae60", fg="white").place(relx=0.5, rely=0.5, anchor="center")
+
+    # Mensaje
+    msg = (
+        f"Logs analizados: {n_logs}\n"
+        f"Ocurrencias encontradas: {n_results}\n"
+        f"Líneas procesadas: {n_lines}\n\n"
+        f"Reporte guardado en:\n{output_file}"
+    )
+    ttk.Label(frm, text=msg, justify="center",
+              font=("Segoe UI", 9)).pack(pady=(0, 14))
+
+    # Botones
+    btn_frame = ttk.Frame(frm)
+    btn_frame.pack()
+
+    def open_report():
+        try:
+            os.startfile(output_file)
+        except Exception:
+            pass
+
+    def open_folder():
+        folder = os.path.dirname(os.path.abspath(output_file))
+        try:
+            subprocess.Popen(f'explorer /select,"{os.path.abspath(output_file)}"')
+        except Exception:
+            os.startfile(folder)
+
+    ttk.Button(btn_frame, text="📄 Abrir reporte", width=18,
+               command=open_report).pack(side="left", padx=4)
+    ttk.Button(btn_frame, text="📂 Abrir carpeta", width=18,
+               command=open_folder).pack(side="left", padx=4)
+    ttk.Button(btn_frame, text="Cerrar", width=10,
+               command=dlg.destroy).pack(side="left", padx=4)
+
+    # Centrar sobre la ventana padre
+    dlg.update_idletasks()
+    x = parent.winfo_x() + (parent.winfo_width() - dlg.winfo_width()) // 2
+    y = parent.winfo_y() + (parent.winfo_height() - dlg.winfo_height()) // 2
+    dlg.geometry(f"+{x}+{y}")
+
+    # Sonido alegre
+    try:
+        import winsound
+        winsound.PlaySound("SystemExclamation", winsound.SND_ALIAS | winsound.SND_ASYNC)
+    except Exception:
+        pass
+
+
+def run_analysis(log_files, xlsx_file, output_file, status_var, btn_run, root,
+                 api_state=None):
+    """Ejecuta el análisis sobre múltiples logs y genera un único reporte."""
     import tempfile, shutil
     tmp_xlsx = None
     try:
-        # Importar funciones del analizador
-        from log_analyzer import load_events_from_xlsx, extract_log_lines, analyze_log, export_html, export_xlsx
+        from log_analyzer import (load_events_from_xlsx, extract_log_lines,
+                                   analyze_log, export_html, export_xlsx)
 
-        # Copiar el xlsx a un temporal para evitar errno 13 si está abierto en Excel
+        # Copiar xlsx a temporal para evitar errno 13 si está abierto en Excel
         tmp_xlsx = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
         tmp_xlsx.close()
         shutil.copy2(xlsx_file, tmp_xlsx.name)
@@ -31,31 +99,44 @@ def run_analysis(log_file, xlsx_file, output_file, status_var, btn_run, root):
         root.update_idletasks()
         events = load_events_from_xlsx(tmp_xlsx.name)
 
-        status_var.set(f"Leyendo log ({os.path.basename(log_file)})...")
-        root.update_idletasks()
-        log_lines = extract_log_lines(log_file)
+        all_results   = []
+        total_lines   = 0
+        log_label     = ", ".join(os.path.basename(f) for f in log_files)
 
-        status_var.set("Analizando...")
-        root.update_idletasks()
-        results = analyze_log(log_lines, events)
+        for i, lf in enumerate(log_files, 1):
+            status_var.set(f"Leyendo log {i}/{len(log_files)}: {os.path.basename(lf)}…")
+            root.update_idletasks()
+            lines = extract_log_lines(lf)
+            total_lines += len(lines)
+
+            status_var.set(f"Analizando {i}/{len(log_files)}: {os.path.basename(lf)}…")
+            root.update_idletasks()
+            results = analyze_log(lines, events)
+
+            # Anotar de qué archivo proviene cada resultado
+            for r in results:
+                r["_source"] = os.path.basename(lf)
+            all_results.extend(results)
 
         status_var.set("Exportando reporte...")
         root.update_idletasks()
 
         if output_file.lower().endswith(".xlsx"):
-            export_xlsx(results, output_file)
+            export_xlsx(all_results, output_file)
         else:
-            export_html(results, log_file, output_file)
+            export_html(all_results, log_label, output_file)
 
         status_var.set(
-            f"Listo. {len(results)} ocurrencias en {len(log_lines)} líneas."
+            f"Listo. {len(all_results)} ocurrencias en {total_lines} líneas "
+            f"({len(log_files)} log(s))."
         )
-        messagebox.showinfo(
-            "Análisis completado",
-            f"Ocurrencias encontradas: {len(results)}\n"
-            f"Líneas procesadas: {len(log_lines)}\n\n"
-            f"Reporte guardado en:\n{output_file}",
-        )
+        _show_done_dialog(root, output_file, len(log_files), len(all_results), total_lines)
+        # Acumular métricas para el reporte API
+        if api_state and api_state.get("running"):
+            api_state["analyses_count"] += 1
+            api_state["total_logs"] += len(log_files)
+            api_state["total_lines"] += total_lines
+            api_state["total_occurrences"] += len(all_results)
     except Exception as e:
         status_var.set(f"Error: {e}")
         messagebox.showerror("Error", str(e))
@@ -68,15 +149,6 @@ def run_analysis(log_file, xlsx_file, output_file, status_var, btn_run, root):
         btn_run.config(state="normal")
 
 
-def browse_log(var):
-    path = filedialog.askopenfilename(
-        title="Seleccionar archivo de log",
-        filetypes=[("Todos los archivos", "*.*"), ("Texto", "*.txt"), ("Log", "*.log")],
-    )
-    if path:
-        var.set(path)
-
-
 def browse_xlsx(var):
     path = filedialog.askopenfilename(
         title="Seleccionar base de eventos (.xlsx)",
@@ -86,9 +158,11 @@ def browse_xlsx(var):
         var.set(path)
 
 
-def browse_output(var):
+def browse_output(var, exe_dir=None):
+    _reports_dir = os.path.join(exe_dir or os.getcwd(), "reportes_html")
     path = filedialog.asksaveasfilename(
         title="Guardar reporte como...",
+        initialdir=_reports_dir if os.path.isdir(_reports_dir) else (exe_dir or ""),
         defaultextension=".html",
         filetypes=[("HTML", "*.html"), ("Excel", "*.xlsx")],
     )
@@ -97,41 +171,159 @@ def browse_output(var):
 
 
 def main():
+    from api_tracker import _now_utc, report_session
+
     root = tk.Tk()
     root.title("Log Analyzer VL550")
-    root.resizable(False, False)
+    root.resizable(True, True)
 
-    pad = {"padx": 10, "pady": 6}
+    # ── Estado del tracking API ───────────────────────────────────────────────
+    api_state = {
+        "running": False,
+        "start_time": None,
+        "analyses_count": 0,        # cuántos análisis se corrieron
+        "total_logs": 0,            # cuántos archivos de log procesados
+        "total_lines": 0,           # líneas totales procesadas
+        "total_occurrences": 0,     # ocurrencias encontradas
+    }
 
-    # ── Variables ────────────────────────────────────────────────────────────
-    log_var    = tk.StringVar()
+    def toggle_api():
+        if not api_state["running"]:
+            # Iniciar tracking
+            api_state["running"] = True
+            api_state["start_time"] = _now_utc()
+            api_state["analyses_count"] = 0
+            api_state["total_logs"] = 0
+            api_state["total_lines"] = 0
+            api_state["total_occurrences"] = 0
+            btn_api.config(text="⏹  Detener API", style="ApiStop.TButton")
+            api_status_var.set(f"🟢 API activa desde {api_state['start_time'][:19]}")
+            status_var.set("API tracking iniciado.")
+        else:
+            # Detener y reportar
+            end_time = _now_utc()
+            details = {
+                "analisis_ejecutados": api_state["analyses_count"],
+                "logs_procesados": api_state["total_logs"],
+                "lineas_analizadas": api_state["total_lines"],
+                "ocurrencias_encontradas": api_state["total_occurrences"],
+            }
+            api_state["running"] = False
+            ok, info = report_session(
+                api_state["start_time"], end_time,
+                status="success",
+                records=api_state["total_lines"],
+                details=details,
+            )
+            api_state["start_time"] = None
+            btn_api.config(text="▶  Iniciar API", style="ApiStart.TButton")
+            api_status_var.set("⚪ API inactiva")
+            if ok:
+                status_var.set(
+                    f"API reportada (HTTP {info}): "
+                    f"{details['analisis_ejecutados']} análisis, "
+                    f"{details['logs_procesados']} logs, "
+                    f"{details['lineas_analizadas']} líneas."
+                )
+            else:
+                status_var.set(f"Error al reportar API: {info}")
+
+    def on_close():
+        # Si el tracking está activo al cerrar, reportar automáticamente
+        if api_state["running"]:
+            end_time = _now_utc()
+            details = {
+                "analisis_ejecutados": api_state["analyses_count"],
+                "logs_procesados": api_state["total_logs"],
+                "lineas_analizadas": api_state["total_lines"],
+                "ocurrencias_encontradas": api_state["total_occurrences"],
+            }
+            try:
+                report_session(
+                    api_state["start_time"], end_time,
+                    status="success", records=api_state["total_lines"],
+                    details=details,
+                )
+            except Exception:
+                pass
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_close)
+
+    pad = {"padx": 10, "pady": 5}
+
+    # ── Variables ─────────────────────────────────────────────────────────────
     output_var = tk.StringVar()
     status_var = tk.StringVar(value="Listo.")
 
-    # Buscar lista_eventos_vl550.xlsx junto al .exe o junto al script
     _base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    # Directorio real del exe (o del .py si se corre sin empaquetar)
+    if getattr(sys, "frozen", False):
+        _exe_dir = os.path.dirname(os.path.dirname(sys.executable))  # sube de dist/ al proyecto
+    else:
+        _exe_dir = os.path.dirname(os.path.abspath(__file__))
+
     _default_xlsx = os.path.join(_base, "lista_eventos_vl550.xlsx")
-    # También buscar en el directorio de trabajo actual
     if not os.path.exists(_default_xlsx):
         _default_xlsx = os.path.join(os.getcwd(), "lista_eventos_vl550.xlsx")
-    # Si tampoco existe, dejar la ruta para que el usuario la corrija
     xlsx_var = tk.StringVar(value=_default_xlsx if os.path.exists(_default_xlsx) else "")
 
     # ── Frame principal ───────────────────────────────────────────────────────
     frm = ttk.Frame(root, padding=16)
     frm.grid(row=0, column=0, sticky="nsew")
+    root.columnconfigure(0, weight=1)
+    root.rowconfigure(0, weight=1)
+    frm.columnconfigure(1, weight=1)
 
     # Título
-    ttk.Label(frm, text="Log Analyzer — VL550 / CGI", font=("Segoe UI", 12, "bold")).grid(
-        row=0, column=0, columnspan=3, pady=(0, 14), sticky="w"
+    ttk.Label(frm, text="Log Analyzer — VL550 / CGI",
+              font=("Segoe UI", 12, "bold")).grid(
+        row=0, column=0, columnspan=3, pady=(0, 12), sticky="w"
     )
 
-    # ── Archivo de log ────────────────────────────────────────────────────────
-    ttk.Label(frm, text="Archivo de log:").grid(row=1, column=0, sticky="w", **pad)
-    ttk.Entry(frm, textvariable=log_var, width=52).grid(row=1, column=1, sticky="ew", **pad)
-    ttk.Button(frm, text="Examinar…", command=lambda: browse_log(log_var)).grid(
-        row=1, column=2, **pad
-    )
+    # ── Lista de logs ─────────────────────────────────────────────────────────
+    ttk.Label(frm, text="Archivos de log:").grid(row=1, column=0, sticky="nw", **pad)
+
+    list_frame = ttk.Frame(frm)
+    list_frame.grid(row=1, column=1, sticky="nsew", **pad)
+    list_frame.columnconfigure(0, weight=1)
+    frm.rowconfigure(1, weight=1)
+
+    log_listbox = tk.Listbox(list_frame, height=6, selectmode=tk.EXTENDED,
+                              font=("Consolas", 9), activestyle="dotbox")
+    log_listbox.grid(row=0, column=0, sticky="nsew")
+
+    sb = ttk.Scrollbar(list_frame, orient="vertical", command=log_listbox.yview)
+    sb.grid(row=0, column=1, sticky="ns")
+    log_listbox.configure(yscrollcommand=sb.set)
+
+    # Botones de la lista
+    btn_frame = ttk.Frame(frm)
+    btn_frame.grid(row=1, column=2, sticky="n", padx=(0, 10), pady=5)
+
+    def add_logs():
+        _logs_dir = os.path.join(_exe_dir, "logs")
+        paths = filedialog.askopenfilenames(
+            title="Agregar archivos de log",
+            initialdir=_logs_dir if os.path.isdir(_logs_dir) else _exe_dir,
+            filetypes=[("Todos los archivos", "*.*"),
+                       ("Texto", "*.txt"), ("Log", "*.log")],
+        )
+        existing = list(log_listbox.get(0, tk.END))
+        for p in paths:
+            if p not in existing:
+                log_listbox.insert(tk.END, p)
+
+    def remove_selected():
+        for i in reversed(log_listbox.curselection()):
+            log_listbox.delete(i)
+
+    def clear_list():
+        log_listbox.delete(0, tk.END)
+
+    ttk.Button(btn_frame, text="➕ Agregar", width=12, command=add_logs).pack(pady=2)
+    ttk.Button(btn_frame, text="➖ Quitar",  width=12, command=remove_selected).pack(pady=2)
+    ttk.Button(btn_frame, text="🗑 Limpiar", width=12, command=clear_list).pack(pady=2)
 
     # ── Base de eventos ───────────────────────────────────────────────────────
     ttk.Label(frm, text="Base de eventos (.xlsx):").grid(row=2, column=0, sticky="w", **pad)
@@ -143,31 +335,55 @@ def main():
     # ── Archivo de salida ─────────────────────────────────────────────────────
     ttk.Label(frm, text="Guardar reporte en:").grid(row=3, column=0, sticky="w", **pad)
     ttk.Entry(frm, textvariable=output_var, width=52).grid(row=3, column=1, sticky="ew", **pad)
-    ttk.Button(frm, text="Guardar como…", command=lambda: browse_output(output_var)).grid(
+    ttk.Button(frm, text="Guardar como…", command=lambda: browse_output(output_var, _exe_dir)).grid(
         row=3, column=2, **pad
     )
-
-    ttk.Label(frm, text="(extensión .html o .xlsx determina el formato)", foreground="#666",
-              font=("Segoe UI", 8)).grid(row=4, column=1, sticky="w", padx=10)
+    ttk.Label(frm, text="(extensión .html o .xlsx determina el formato)",
+              foreground="#666", font=("Segoe UI", 8)).grid(
+        row=4, column=1, sticky="w", padx=10
+    )
 
     # ── Separador ─────────────────────────────────────────────────────────────
     ttk.Separator(frm, orient="horizontal").grid(
         row=5, column=0, columnspan=3, sticky="ew", pady=10
     )
 
+    # ── Botón API tracking ────────────────────────────────────────────────────
+    api_status_var = tk.StringVar(value="⚪ API inactiva")
+
+    style = ttk.Style()
+    style.configure("ApiStart.TButton", foreground="green")
+    style.configure("ApiStop.TButton", foreground="red")
+
+    api_frame = ttk.Frame(frm)
+    api_frame.grid(row=6, column=0, columnspan=3, pady=(0, 4))
+
+    btn_api = ttk.Button(api_frame, text="▶  Iniciar API", width=18,
+                         style="ApiStart.TButton", command=toggle_api)
+    btn_api.pack(side="left", padx=(0, 10))
+
+    ttk.Label(api_frame, textvariable=api_status_var,
+              font=("Segoe UI", 9)).pack(side="left")
+
+    # ── Separador ─────────────────────────────────────────────────────────────
+    ttk.Separator(frm, orient="horizontal").grid(
+        row=7, column=0, columnspan=3, sticky="ew", pady=6
+    )
+
     # ── Botón Analizar ────────────────────────────────────────────────────────
-    btn_run = ttk.Button(frm, text="▶  Analizar", style="Accent.TButton")
+    btn_run = ttk.Button(frm, text="▶  Analizar")
 
     def on_run():
-        log_file    = log_var.get().strip()
+        log_files   = list(log_listbox.get(0, tk.END))
         xlsx_file   = xlsx_var.get().strip()
         output_file = output_var.get().strip()
 
-        if not log_file:
-            messagebox.showwarning("Falta dato", "Seleccioná el archivo de log.")
+        if not log_files:
+            messagebox.showwarning("Falta dato", "Agregá al menos un archivo de log.")
             return
-        if not os.path.exists(log_file):
-            messagebox.showerror("Error", f"No se encontró el log:\n{log_file}")
+        missing = [f for f in log_files if not os.path.exists(f)]
+        if missing:
+            messagebox.showerror("Error", "No se encontraron:\n" + "\n".join(missing))
             return
         if not xlsx_file:
             messagebox.showwarning("Falta dato", "Seleccioná la base de eventos (.xlsx).")
@@ -183,20 +399,21 @@ def main():
         status_var.set("Procesando…")
         threading.Thread(
             target=run_analysis,
-            args=(log_file, xlsx_file, output_file, status_var, btn_run, root),
+            args=(log_files, xlsx_file, output_file, status_var, btn_run, root,
+                  api_state),
             daemon=True,
         ).start()
 
     btn_run.config(command=on_run)
-    btn_run.grid(row=6, column=0, columnspan=3, pady=(4, 10))
+    btn_run.grid(row=8, column=0, columnspan=3, pady=(4, 10))
 
     # ── Barra de estado ───────────────────────────────────────────────────────
     ttk.Separator(frm, orient="horizontal").grid(
-        row=7, column=0, columnspan=3, sticky="ew"
+        row=9, column=0, columnspan=3, sticky="ew"
     )
     ttk.Label(frm, textvariable=status_var, foreground="#444",
               font=("Segoe UI", 8)).grid(
-        row=8, column=0, columnspan=3, sticky="w", padx=10, pady=(4, 0)
+        row=10, column=0, columnspan=3, sticky="w", padx=10, pady=(4, 2)
     )
 
     root.mainloop()

@@ -264,17 +264,45 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
         c = id_color.get(eid, "#555")
         return f"<span class='badge' style='background:{c}'>{eid}</span>"
 
-    # ── Resumen ──────────────────────────────────────────────────────────────
-    def extract_value(patron, mensaje):
-        """Extrae el valor que sigue al patrón en el mensaje."""
+    # ── Extracción de valor por ID ────────────────────────────────────────────
+    # Cada entrada: id -> patrón regex con un grupo de captura
+    _VALUE_PATTERNS = {
+        3:  r'Tarjeta Mifare detectada\.\s*UID=(\S+)',
+        7:  r'COMPANY:\s*(\S+)',
+        10: r'ulLastFour:\s*(\S+)',
+        11: r'"serial_number"\s*:\s*"([^"]+)"',
+        12: r'appVersion\s*=\s*(v[\d\.\-k]+)',
+        14: r'QR Record serialNumber:\s*(\S+)',
+        20: r'FARE:\s*(\S+)',
+        22: r't\.counter:(\S+)',
+        23: r'CONTADOR_BOLETOS,\s*Value:\s*(\S+)',
+        26: r'merchantName:\s*(.+)',
+        27: r'driver\s*=\s*(\S+)',
+        28: r'Name:\s*EVENTS_NUMBER,\s*Value:\s*(\S+)',
+        29: r'"versionFW"\s*:\s*"(v[^"]+)"',
+        34: r'Name:\s*SERVICE_ID,\s*Value:\s*(\S+)',
+        39: r'Tabla:RL\s+id:9\s+currVersion:(\S+)',
+        40: r'Tabla:AL\s+id:11\s+currVersion:(\S+)',
+        41: r'Tabla:CO\s+id:3\s+currVersion:(\S+)',
+        42: r'Tabla:CD\s+id:15\s+currVersion:(\S+)',
+        43: r'Tabla:LR\s+id:23\s+currVersion:(\S+)',
+        44: r'Tabla:RS\s+id:16\s+currVersion:(\S+)',
+        45: r'Tabla:GP\s+id:1\s+currVersion:(\S+)',
+        46: r'Tabla:SG\s+id:20\s+currVersion:(\S+)',
+        47: r'Tabla:LI\s+id:18\s+currVersion:(\S+)',
+        48: r'Tabla:OL\s+id:10\s+currVersion:(\S+)',
+    }
+    _compiled_value = {eid: re.compile(pat, re.IGNORECASE)
+                       for eid, pat in _VALUE_PATTERNS.items()}
+
+    def extract_value(eid, mensaje):
+        """Extrae el valor de interés según el ID del evento."""
+        pat = _compiled_value.get(eid)
+        if pat is None:
+            return ""
         try:
-            idx = mensaje.lower().find(patron.lower())
-            if idx == -1:
-                return ""
-            after = mensaje[idx + len(patron):].strip()
-            # Tomar hasta el primer separador (coma, punto y coma, salto, corchete)
-            val = re.split(r'[,;\n\[\]{}]', after)[0].strip()
-            return val[:60]  # limitar longitud
+            m = pat.search(mensaje)
+            return m.group(1).strip()[:80] if m else ""
         except Exception:
             return ""
 
@@ -283,7 +311,7 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
         sample = by_id[eid][0]
         count  = len(by_id[eid])
         bar_w  = min(count * 18, 200)
-        valor  = extract_value(sample['patron'], sample['mensaje'])
+        valor  = extract_value(eid, sample['mensaje'])
         summary_rows += (
             f"<tr>"
             f"<td class='ctr'>{badge(eid)}</td>"
@@ -298,17 +326,23 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
         )
 
     # ── Detalle ──────────────────────────────────────────────────────────────
+    multi_source = any(r.get("_source") for r in results)
     detail_rows = ""
     for r in results:
+        valor = extract_value(r['id'], r['mensaje'])
+        source_td = f"<td class='src'>{h.escape(r.get('_source',''))}</td>" if multi_source else ""
         detail_rows += (
             f"<tr data-id='{r['id']}'>"
             f"<td class='ctr'>{badge(r['id'])}</td>"
+            f"{source_td}"
             f"<td class='mono ts'>{h.escape(r['timestamp'])}</td>"
             f"<td class='ctr'>{r['linea_num']}</td>"
             f"<td class='mono msg'>{h.escape(r['mensaje'])}</td>"
+            f"<td class='mono val'>{h.escape(valor)}</td>"
             f"<td class='sig'>{h.escape(r['significado'])}</td>"
             f"</tr>\n"
         )
+    source_th = "<th>Fuente</th>" if multi_source else ""
 
     # ── Opciones de filtro por ID ─────────────────────────────────────────────
     filter_btns = "<button class='fbtn active' onclick=\"filterTable('all',this)\">Todos</button>\n"
@@ -364,6 +398,7 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
   .msg   {{ word-break:break-word; max-width:420px; }}
   .sig   {{ color:#2e4a6e; font-size:.84rem; }}
   .val   {{ color:#555; font-size:.82rem; max-width:180px; word-break:break-word; }}
+  .src   {{ font-size:.78rem; color:#888; white-space:nowrap; font-family:Consolas,'Courier New',monospace; }}
   .ctr   {{ text-align:center; }}
 
   /* ── Barra de ocurrencias ── */
@@ -371,13 +406,28 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
   .bar      {{ height:10px; border-radius:5px; min-width:4px; }}
   .bar-num  {{ font-weight:700; font-size:.85rem; color:#333; }}
 
-  /* ── Filtros ── */
+  /* ── Filtros por ID ── */
   .filters {{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }}
   .fbtn    {{ padding:5px 12px; border-radius:16px; border:2px solid var(--bc,#1a6fa8);
               background:#fff; color:var(--bc,#1a6fa8); font-size:.8rem; font-weight:600;
               cursor:pointer; transition:all .15s; }}
   .fbtn:hover, .fbtn.active {{ background:var(--bc,#1a6fa8); color:#fff; }}
   .fcnt  {{ font-weight:400; opacity:.85; }}
+
+  /* ── Barra de búsqueda ── */
+  .search-bar {{ display:flex; align-items:center; gap:10px; margin-bottom:10px;
+                 background:#fff; border:1px solid #c8d0e0; border-radius:8px;
+                 padding:6px 14px; box-shadow:0 1px 3px rgba(0,0,0,.07); }}
+  .search-bar input {{ border:none; outline:none; font-size:.88rem; flex:1;
+                       font-family:Consolas,'Courier New',monospace; color:#222; }}
+  .search-bar label {{ font-size:.78rem; color:#666; white-space:nowrap; }}
+  .search-bar select {{ border:1px solid #c8d0e0; border-radius:4px; font-size:.8rem;
+                        padding:2px 6px; color:#333; background:#f7f9fc; cursor:pointer; }}
+  .search-bar .s-count {{ font-size:.78rem; color:#888; white-space:nowrap; }}
+  .search-bar button {{ border:none; background:none; cursor:pointer; color:#888;
+                        font-size:1rem; padding:0 4px; }}
+  .search-bar button:hover {{ color:#c62828; }}
+  mark {{ background:#fff176; border-radius:2px; padding:0 1px; }}
 </style>
 </head>
 <body>
@@ -405,20 +455,92 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
 
 <h2>Detalle Cronológico</h2>
 <div class="filters" id="filters">{filter_btns}</div>
+<div class="search-bar">
+  <span>🔍</span>
+  <input type="text" id="search-input" placeholder="Buscar en Timestamp, Línea, Mensaje o Valor…" oninput="applySearch()">
+  <label for="search-col">en:</label>
+  <select id="search-col" onchange="applySearch()">
+    <option value="all">Todos los campos</option>
+    <option value="1">Timestamp</option>
+    <option value="2">Línea</option>
+    <option value="3">Mensaje</option>
+    <option value="4">Valor</option>
+  </select>
+  <span class="s-count" id="search-count"></span>
+  <button onclick="clearSearch()" title="Limpiar búsqueda">✕</button>
+</div>
 <div class="tbl-wrap">
 <table id="detail-table">
-  <thead><tr><th>ID</th><th>Timestamp</th><th>Línea</th><th>Mensaje</th><th>Significado</th></tr></thead>
+  <thead><tr><th>ID</th>{source_th}<th>Timestamp</th><th>Línea</th><th>Mensaje</th><th>Valor</th><th>Significado</th></tr></thead>
   <tbody>{detail_rows}</tbody>
 </table>
 </div>
 
 <script>
+var _activeId = 'all';
+
 function filterTable(id, btn) {{
   document.querySelectorAll('.fbtn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  document.querySelectorAll('#detail-table tbody tr').forEach(tr => {{
-    tr.classList.toggle('hidden', id !== 'all' && tr.dataset.id != id);
+  _activeId = id;
+  applySearch();
+}}
+
+function applySearch() {{
+  var term = document.getElementById('search-input').value.trim().toLowerCase();
+  var col  = document.getElementById('search-col').value;
+  var rows = document.querySelectorAll('#detail-table tbody tr');
+  var visible = 0;
+
+  rows.forEach(function(tr) {{
+    // Filtro por ID
+    var idMatch = (_activeId === 'all' || tr.dataset.id == _activeId);
+
+    // Filtro por búsqueda
+    var searchMatch = true;
+    if (term) {{
+      var cells = tr.querySelectorAll('td');
+      // col indices: 1=Timestamp, 2=Línea, 3=Mensaje, 4=Valor
+      var targets = col === 'all' ? [1,2,3,4] : [parseInt(col)];
+      searchMatch = targets.some(function(i) {{
+        return cells[i] && cells[i].textContent.toLowerCase().includes(term);
+      }});
+    }}
+
+    var show = idMatch && searchMatch;
+    tr.classList.toggle('hidden', !show);
+    if (show) visible++;
+
+    // Highlight
+    [1,2,3,4].forEach(function(i) {{
+      if (!tr.classList.contains('hidden') && term && (col === 'all' || parseInt(col) === i)) {{
+        var cell = tr.querySelectorAll('td')[i];
+        if (cell) cell.innerHTML = highlight(cell.textContent, term);
+      }} else if (tr.querySelectorAll('td')[i]) {{
+        var cell = tr.querySelectorAll('td')[i];
+        if (cell.querySelector('mark')) cell.textContent = cell.textContent;
+      }}
+    }});
   }});
+
+  var total = Array.from(rows).filter(r => !r.classList.contains('hidden')).length;
+  document.getElementById('search-count').textContent = term ? total + ' resultado(s)' : '';
+}}
+
+function highlight(text, term) {{
+  if (!term) return escHtml(text);
+  var re = new RegExp('(' + term.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&') + ')', 'gi');
+  return escHtml(text).replace(re, '<mark>$1</mark>');
+}}
+
+function escHtml(s) {{
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}}
+
+function clearSearch() {{
+  document.getElementById('search-input').value = '';
+  document.getElementById('search-count').textContent = '';
+  applySearch();
 }}
 </script>
 </body>
