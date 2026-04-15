@@ -3,15 +3,369 @@ GUI para log_analyzer.py — soporta múltiples logs en un solo reporte
 Uso: python log_analyzer_gui.py
 """
 
+import re
 import sys
 import os
+import csv
+import html as h
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from collections import defaultdict
+from docx import Document
+from openpyxl import load_workbook
 
 # Forzar UTF-8 en stdout (puede ser None en ejecutables sin consola)
 if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Funciones del analizador (incrustadas para compatibilidad con PyInstaller)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def load_events_from_xlsx(xlsx_path):
+    wb = load_workbook(xlsx_path, read_only=True, data_only=True)
+    ws = wb.active
+    events = []
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if len(row) < 2:
+            continue
+        eid = row[0]
+        patron_raw = row[1]
+        significado = row[2] if len(row) > 2 else ""
+        if not eid or not patron_raw:
+            continue
+        events.append({
+            "id":          int(eid),
+            "patron":      str(patron_raw).strip(),
+            "significado": str(significado).strip() if significado else "",
+        })
+    wb.close()
+    return events
+
+
+def extract_log_lines(file_path):
+    if file_path.lower().endswith(".docx"):
+        doc = Document(file_path)
+        return [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+    else:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            return [line.rstrip() for line in f if line.strip()]
+
+
+_TS_PATTERN = re.compile(r"^\[(\d{2}/\d{2}/\d{2}-\d{2}:\d{2}:\d{2}\.\d+)\]")
+
+
+def analyze_log(log_lines, events):
+    compiled = [
+        (ev, re.compile(re.escape(ev["patron"]), re.IGNORECASE))
+        for ev in events
+    ]
+    results = []
+    for line_num, line in enumerate(log_lines, start=1):
+        ts_match  = _TS_PATTERN.match(line)
+        timestamp = ts_match.group(1) if ts_match else "N/A"
+        msg_clean = re.sub(r"^\[.*?\]\[.*?\]\[.*?\]", "", line).strip() or line
+        for ev, pattern in compiled:
+            if pattern.search(line):
+                results.append({
+                    "id":          ev["id"],
+                    "patron":      ev["patron"],
+                    "significado": ev["significado"],
+                    "timestamp":   timestamp,
+                    "linea_num":   line_num,
+                    "mensaje":     msg_clean,
+                    "linea":       line,
+                })
+    return results
+
+
+def export_xlsx(results, output_path="eventos_encontrados.xlsx"):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Eventos"
+    headers = ["ID", "Patrón", "Significado", "Timestamp", "Línea Nro", "Mensaje"]
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="1A3A5C")
+    for col, h_text in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h_text)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+    for row_idx, r in enumerate(results, 2):
+        ws.cell(row=row_idx, column=1, value=r["id"])
+        ws.cell(row=row_idx, column=2, value=r["patron"])
+        ws.cell(row=row_idx, column=3, value=r["significado"])
+        ws.cell(row=row_idx, column=4, value=r["timestamp"])
+        ws.cell(row=row_idx, column=5, value=r["linea_num"])
+        ws.cell(row=row_idx, column=6, value=r["mensaje"])
+    col_widths = [8, 40, 50, 22, 10, 80]
+    for col, width in enumerate(col_widths, 1):
+        ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = width
+    os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else ".", exist_ok=True)
+    wb.save(output_path)
+
+
+def export_html(results, log_file, output_path="reporte_eventos.html"):
+    by_id = defaultdict(list)
+    for r in results:
+        by_id[r["id"]].append(r)
+
+    PALETTE = [
+        "#1a6fa8","#2e7d32","#6a1b9a","#c62828","#00838f",
+        "#ef6c00","#4527a0","#00695c","#ad1457","#37474f",
+    ]
+    id_color = {eid: PALETTE[i % len(PALETTE)] for i, eid in enumerate(sorted(by_id.keys()))}
+
+    def badge(eid):
+        c = id_color.get(eid, "#555")
+        return f"<span class='badge' style='background:{c}'>{eid}</span>"
+
+    _VALUE_PATTERNS = {
+        3:  r'Tarjeta Mifare detectada\.\s*UID=(\S+)',
+        7:  r'COMPANY:\s*(\S+)',
+        10: r'ulLastFour:\s*(\S+)',
+        11: r'"serial_number"\s*:\s*"([^"]+)"',
+        12: r'appVersion\s*=\s*(v[\d\.\-k]+)',
+        14: r'QR Record serialNumber:\s*(\S+)',
+        20: r'FARE:\s*(\S+)',
+        22: r't\.counter:(\S+)',
+        23: r'CONTADOR_BOLETOS,\s*Value:\s*(\S+)',
+        26: r'merchantName:\s*(.+)',
+        27: r'driver\s*=\s*(\S+)',
+        28: r'Name:\s*EVENTS_NUMBER,\s*Value:\s*(\S+)',
+        29: r'"versionFW"\s*:\s*"(v[^"]+)"',
+        34: r'Name:\s*SERVICE_ID,\s*Value:\s*(\S+)',
+        39: r'Tabla:RL\s+id:9\s+currVersion:(\S+)',
+        40: r'Estado del validador:\s*(\d+)',
+        41: r'Tabla:CO\s+id:3\s+currVersion:(\S+)',
+        42: r'Tabla:CD\s+id:15\s+currVersion:(\S+)',
+        43: r'Tabla:LR\s+id:23\s+currVersion:(\S+)',
+        44: r'Tabla:RS\s+id:16\s+currVersion:(\S+)',
+        45: r'Tabla:GP\s+id:1\s+currVersion:(\S+)',
+        46: r'Tabla:SG\s+id:20\s+currVersion:(\S+)',
+        47: r'Tabla:LI\s+id:18\s+currVersion:(\S+)',
+        48: r'Tabla:OL\s+id:10\s+currVersion:(\S+)',
+    }
+    _compiled_value = {eid: re.compile(pat, re.IGNORECASE) for eid, pat in _VALUE_PATTERNS.items()}
+
+    def extract_value(eid, mensaje):
+        pat = _compiled_value.get(eid)
+        if pat is None:
+            return ""
+        try:
+            m = pat.search(mensaje)
+            return m.group(1).strip()[:80] if m else ""
+        except Exception:
+            return ""
+
+    summary_rows = ""
+    for eid in sorted(by_id.keys()):
+        sample = by_id[eid][0]
+        count  = len(by_id[eid])
+        bar_w  = min(count * 18, 200)
+        valor  = extract_value(eid, sample['mensaje'])
+        summary_rows += (
+            f"<tr>"
+            f"<td class='ctr'>{badge(eid)}</td>"
+            f"<td class='ctr'><div class='bar-wrap'>"
+            f"<div class='bar' style='width:{bar_w}px;background:{id_color[eid]}'></div>"
+            f"<span class='bar-num'>{count}</span></div></td>"
+            f"<td class='mono'>{h.escape(sample['patron'])}</td>"
+            f"<td class='mono val'>{h.escape(valor)}</td>"
+            f"<td>{h.escape(sample['significado'])}</td>"
+            f"</tr>\n"
+        )
+
+    multi_source = any(r.get("_source") for r in results)
+    detail_rows = ""
+    for r in results:
+        valor = extract_value(r['id'], r['mensaje'])
+        source_td = f"<td class='src'>{h.escape(r.get('_source',''))}</td>" if multi_source else ""
+        detail_rows += (
+            f"<tr data-id='{r['id']}'>"
+            f"<td class='ctr'>{badge(r['id'])}</td>"
+            f"{source_td}"
+            f"<td class='mono ts'>{h.escape(r['timestamp'])}</td>"
+            f"<td class='ctr'>{r['linea_num']}</td>"
+            f"<td class='mono msg'>{h.escape(r['mensaje'])}</td>"
+            f"<td class='mono val'>{h.escape(valor)}</td>"
+            f"<td class='sig'>{h.escape(r['significado'])}</td>"
+            f"</tr>\n"
+        )
+    source_th = "<th>Fuente</th>" if multi_source else ""
+
+    filter_checks = ""
+    for eid in sorted(by_id.keys()):
+        c = id_color[eid]
+        sig = h.escape(by_id[eid][0]['significado'])
+        cnt = len(by_id[eid])
+        filter_checks += (
+            f"<label class='chk-label' style='--bc:{c}'>"
+            f"<input type='checkbox' class='ev-chk' value='{eid}' checked onchange='applySearch()'>"
+            f"<span class='chk-badge' style='background:{c}'>{eid}</span>"
+            f"<span class='chk-sig'>{sig}</span>"
+            f"<span class='chk-cnt'>({cnt})</span>"
+            f"</label>\n"
+        )
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reporte de Eventos — {h.escape(log_file)}</title>
+<style>
+  *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+  body{{font-family:Segoe UI,Arial,sans-serif;background:#eef1f6;color:#222;padding:28px 32px}}
+  h1{{font-size:1.4rem;color:#1a3a5c;border-bottom:3px solid #1a6fa8;padding-bottom:10px;margin-bottom:6px}}
+  h2{{font-size:1rem;color:#1a3a5c;margin:32px 0 10px;text-transform:uppercase;letter-spacing:.05em}}
+  .meta{{background:#fff;border-left:4px solid #1a6fa8;padding:10px 18px;margin:14px 0 28px;border-radius:4px;font-size:.88rem;color:#444;display:flex;gap:24px;flex-wrap:wrap}}
+  .meta strong{{color:#1a3a5c}}
+  .cards{{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:28px}}
+  .card{{background:#fff;border-radius:8px;padding:16px 22px;box-shadow:0 1px 4px rgba(0,0,0,.1);min-width:140px;text-align:center}}
+  .card .num{{font-size:2rem;font-weight:700;color:#1a6fa8;line-height:1}}
+  .card .lbl{{font-size:.78rem;color:#666;margin-top:4px}}
+  .tbl-wrap{{overflow-x:auto;border-radius:8px;box-shadow:0 1px 5px rgba(0,0,0,.1);margin-bottom:36px}}
+  table{{border-collapse:collapse;width:100%;background:#fff;font-size:.86rem}}
+  thead tr{{background:#1a3a5c}}
+  th{{color:#fff;padding:10px 14px;text-align:left;white-space:nowrap;font-size:.82rem;font-weight:600;letter-spacing:.03em}}
+  td{{padding:8px 14px;border-bottom:1px solid #e4e8f0;vertical-align:top}}
+  tbody tr:last-child td{{border-bottom:none}}
+  tbody tr:hover td{{background:#f0f5ff}}
+  tbody tr.hidden{{display:none}}
+  .badge{{display:inline-block;padding:3px 9px;border-radius:12px;color:#fff;font-size:.78rem;font-weight:700;letter-spacing:.02em}}
+  .mono{{font-family:Consolas,'Courier New',monospace;font-size:.82rem}}
+  .ts{{white-space:nowrap;color:#555}}
+  .msg{{word-break:break-word;max-width:420px}}
+  .sig{{color:#2e4a6e;font-size:.84rem}}
+  .val{{color:#555;font-size:.82rem;max-width:180px;word-break:break-word}}
+  .src{{font-size:.78rem;color:#888;white-space:nowrap;font-family:Consolas,'Courier New',monospace}}
+  .ctr{{text-align:center}}
+  .bar-wrap{{display:flex;align-items:center;gap:8px}}
+  .bar{{height:10px;border-radius:5px;min-width:4px}}
+  .bar-num{{font-weight:700;font-size:.85rem;color:#333}}
+  .filter-panel{{background:#fff;border:1px solid #c8d0e0;border-radius:8px;padding:12px 16px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.07)}}
+  .fp-header{{display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap}}
+  .fp-title{{font-size:.82rem;font-weight:600;color:#1a3a5c;text-transform:uppercase;letter-spacing:.04em}}
+  .fp-actions{{display:flex;gap:6px}}
+  .fp-actions button{{padding:3px 10px;border-radius:12px;border:1px solid #c8d0e0;background:#f7f9fc;color:#444;font-size:.78rem;cursor:pointer}}
+  .fp-actions button:hover{{background:#e0e8f5}}
+  .chk-list{{display:flex;flex-wrap:wrap;gap:6px}}
+  .chk-label{{display:flex;align-items:center;gap:5px;cursor:pointer;background:#f7f9fc;border:1.5px solid var(--bc,#1a6fa8);border-radius:20px;padding:4px 10px 4px 6px;font-size:.8rem;transition:background .15s;user-select:none}}
+  .chk-label:hover{{background:#e8f0fb}}
+  .chk-label input{{accent-color:var(--bc,#1a6fa8);width:14px;height:14px;cursor:pointer}}
+  .chk-badge{{display:inline-block;padding:1px 7px;border-radius:10px;color:#fff;font-size:.75rem;font-weight:700}}
+  .chk-sig{{color:#333;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+  .chk-cnt{{color:#888;font-size:.75rem}}
+  .search-bar{{display:flex;align-items:center;gap:10px;margin-bottom:10px;background:#fff;border:1px solid #c8d0e0;border-radius:8px;padding:6px 14px;box-shadow:0 1px 3px rgba(0,0,0,.07)}}
+  .search-bar input{{border:none;outline:none;font-size:.88rem;flex:1;font-family:Consolas,'Courier New',monospace;color:#222}}
+  .search-bar label{{font-size:.78rem;color:#666;white-space:nowrap}}
+  .search-bar select{{border:1px solid #c8d0e0;border-radius:4px;font-size:.8rem;padding:2px 6px;color:#333;background:#f7f9fc;cursor:pointer}}
+  .search-bar .s-count{{font-size:.78rem;color:#888;white-space:nowrap}}
+  .search-bar button{{border:none;background:none;cursor:pointer;color:#888;font-size:1rem;padding:0 4px}}
+  .search-bar button:hover{{color:#c62828}}
+  mark{{background:#fff176;border-radius:2px;padding:0 1px}}
+</style>
+</head>
+<body>
+<h1>Reporte de Eventos de Log</h1>
+<div class="meta">
+  <span><strong>Archivo:</strong> {h.escape(log_file)}</span>
+  <span><strong>Ocurrencias totales:</strong> {len(results)}</span>
+  <span><strong>Tipos de evento:</strong> {len(by_id)}</span>
+</div>
+<div class="cards">
+  <div class="card"><div class="num">{len(results)}</div><div class="lbl">Ocurrencias totales</div></div>
+  <div class="card"><div class="num">{len(by_id)}</div><div class="lbl">Tipos de evento</div></div>
+  <div class="card"><div class="num">{max((len(v) for v in by_id.values()), default=0)}</div><div class="lbl">Máx. ocurrencias (un tipo)</div></div>
+</div>
+<h2>Resumen por Tipo de Evento</h2>
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>ID</th><th>Ocurrencias</th><th>Patrón buscado</th><th>Valor</th><th>Significado</th></tr></thead>
+  <tbody>{summary_rows}</tbody>
+</table>
+</div>
+<h2>Detalle Cronológico</h2>
+<div class="filter-panel">
+  <div class="fp-header">
+    <span class="fp-title">Filtrar por tipo de evento</span>
+    <div class="fp-actions">
+      <button onclick="selectAll(true)">Seleccionar todos</button>
+      <button onclick="selectAll(false)">Deseleccionar todos</button>
+    </div>
+  </div>
+  <div class="chk-list">{filter_checks}</div>
+</div>
+<div class="search-bar">
+  <span>🔍</span>
+  <input type="text" id="search-input" placeholder="Buscar en Timestamp, Línea, Mensaje o Valor…" oninput="applySearch()">
+  <label for="search-col">en:</label>
+  <select id="search-col" onchange="applySearch()">
+    <option value="all">Todos los campos</option>
+    <option value="1">Timestamp</option>
+    <option value="2">Línea</option>
+    <option value="3">Mensaje</option>
+    <option value="4">Valor</option>
+  </select>
+  <span class="s-count" id="search-count"></span>
+  <button onclick="clearSearch()" title="Limpiar búsqueda">✕</button>
+</div>
+<div class="tbl-wrap">
+<table id="detail-table">
+  <thead><tr><th>ID</th>{source_th}<th>Timestamp</th><th>Línea</th><th>Mensaje</th><th>Valor</th><th>Significado</th></tr></thead>
+  <tbody>{detail_rows}</tbody>
+</table>
+</div>
+<script>
+function getCheckedIds(){{return Array.from(document.querySelectorAll('.ev-chk:checked')).map(function(c){{return c.value;}});}}
+function selectAll(state){{document.querySelectorAll('.ev-chk').forEach(function(c){{c.checked=state;}});applySearch();}}
+function applySearch(){{
+  var term=document.getElementById('search-input').value.trim().toLowerCase();
+  var col=document.getElementById('search-col').value;
+  var rows=document.querySelectorAll('#detail-table tbody tr');
+  var checked=getCheckedIds();
+  rows.forEach(function(tr){{
+    var idMatch=checked.includes(tr.dataset.id);
+    var searchMatch=true;
+    if(term){{
+      var cells=tr.querySelectorAll('td');
+      var targets=col==='all'?[1,2,3,4]:[parseInt(col)];
+      searchMatch=targets.some(function(i){{return cells[i]&&cells[i].textContent.toLowerCase().includes(term);}});
+    }}
+    var show=idMatch&&searchMatch;
+    tr.classList.toggle('hidden',!show);
+    [1,2,3,4].forEach(function(i){{
+      if(!tr.classList.contains('hidden')&&term&&(col==='all'||parseInt(col)===i)){{
+        var cell=tr.querySelectorAll('td')[i];
+        if(cell)cell.innerHTML=highlight(cell.textContent,term);
+      }}else if(tr.querySelectorAll('td')[i]){{
+        var cell=tr.querySelectorAll('td')[i];
+        if(cell.querySelector('mark'))cell.textContent=cell.textContent;
+      }}
+    }});
+  }});
+  var total=Array.from(rows).filter(function(r){{return!r.classList.contains('hidden');}}).length;
+  document.getElementById('search-count').textContent=term?total+' resultado(s)':'';
+}}
+function highlight(text,term){{
+  if(!term)return escHtml(text);
+  var escaped=term.replace(/[.*+?^${{}}()|[\]\\\\]/g,'\\\\$&');
+  return escHtml(text).replace(new RegExp('('+escaped+')','gi'),'<mark>$1</mark>');
+}}
+function escHtml(s){{return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}}
+function clearSearch(){{document.getElementById('search-input').value='';document.getElementById('search-count').textContent='';applySearch();}}
+</script>
+</body>
+</html>"""
+
+    os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else ".", exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html_content)
 
 
 def _show_done_dialog(parent, output_file, n_logs, n_results, n_lines):
@@ -87,9 +441,6 @@ def run_analysis(log_files, xlsx_file, output_file, status_var, btn_run, root,
     import tempfile, shutil
     tmp_xlsx = None
     try:
-        from log_analyzer import (load_events_from_xlsx, extract_log_lines,
-                                   analyze_log, export_html, export_xlsx)
-
         # Copiar xlsx a temporal para evitar errno 13 si está abierto en Excel
         tmp_xlsx = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
         tmp_xlsx.close()

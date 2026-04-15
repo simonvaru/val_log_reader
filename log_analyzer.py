@@ -344,13 +344,19 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
         )
     source_th = "<th>Fuente</th>" if multi_source else ""
 
-    # ── Opciones de filtro por ID ─────────────────────────────────────────────
-    filter_btns = "<button class='fbtn active' onclick=\"filterTable('all',this)\">Todos</button>\n"
+    # ── Opciones de filtro por ID (checkboxes) ───────────────────────────────
+    filter_checks = ""
     for eid in sorted(by_id.keys()):
         c = id_color[eid]
-        filter_btns += (
-            f"<button class='fbtn' style='--bc:{c}' onclick=\"filterTable({eid},this)\">"
-            f"ID {eid} <span class='fcnt'>({len(by_id[eid])})</span></button>\n"
+        sig = h.escape(by_id[eid][0]['significado'])
+        cnt = len(by_id[eid])
+        filter_checks += (
+            f"<label class='chk-label' style='--bc:{c}'>"
+            f"<input type='checkbox' class='ev-chk' value='{eid}' checked onchange='applyFilter()'>"
+            f"<span class='chk-badge' style='background:{c}'>{eid}</span>"
+            f"<span class='chk-sig'>{sig}</span>"
+            f"<span class='chk-cnt'>({cnt})</span>"
+            f"</label>\n"
         )
 
     html_content = f"""<!DOCTYPE html>
@@ -406,13 +412,30 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
   .bar      {{ height:10px; border-radius:5px; min-width:4px; }}
   .bar-num  {{ font-weight:700; font-size:.85rem; color:#333; }}
 
-  /* ── Filtros por ID ── */
-  .filters {{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }}
-  .fbtn    {{ padding:5px 12px; border-radius:16px; border:2px solid var(--bc,#1a6fa8);
-              background:#fff; color:var(--bc,#1a6fa8); font-size:.8rem; font-weight:600;
-              cursor:pointer; transition:all .15s; }}
-  .fbtn:hover, .fbtn.active {{ background:var(--bc,#1a6fa8); color:#fff; }}
-  .fcnt  {{ font-weight:400; opacity:.85; }}
+  /* ── Filtros por ID (checkboxes) ── */
+  .filter-panel {{ background:#fff; border:1px solid #c8d0e0; border-radius:8px;
+                   padding:12px 16px; margin-bottom:14px;
+                   box-shadow:0 1px 3px rgba(0,0,0,.07); }}
+  .filter-panel .fp-header {{ display:flex; align-items:center; gap:12px;
+                               margin-bottom:10px; flex-wrap:wrap; }}
+  .filter-panel .fp-title  {{ font-size:.82rem; font-weight:600; color:#1a3a5c;
+                               text-transform:uppercase; letter-spacing:.04em; }}
+  .fp-actions {{ display:flex; gap:6px; }}
+  .fp-actions button {{ padding:3px 10px; border-radius:12px; border:1px solid #c8d0e0;
+                         background:#f7f9fc; color:#444; font-size:.78rem; cursor:pointer; }}
+  .fp-actions button:hover {{ background:#e0e8f5; }}
+  .chk-list  {{ display:flex; flex-wrap:wrap; gap:6px; }}
+  .chk-label {{ display:flex; align-items:center; gap:5px; cursor:pointer;
+                background:#f7f9fc; border:1.5px solid var(--bc,#1a6fa8);
+                border-radius:20px; padding:4px 10px 4px 6px;
+                font-size:.8rem; transition:background .15s; user-select:none; }}
+  .chk-label:hover {{ background:#e8f0fb; }}
+  .chk-label input {{ accent-color:var(--bc,#1a6fa8); width:14px; height:14px; cursor:pointer; }}
+  .chk-badge {{ display:inline-block; padding:1px 7px; border-radius:10px; color:#fff;
+                font-size:.75rem; font-weight:700; }}
+  .chk-sig   {{ color:#333; max-width:220px; overflow:hidden; text-overflow:ellipsis;
+                white-space:nowrap; }}
+  .chk-cnt   {{ color:#888; font-size:.75rem; }}
 
   /* ── Barra de búsqueda ── */
   .search-bar {{ display:flex; align-items:center; gap:10px; margin-bottom:10px;
@@ -454,7 +477,17 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
 </div>
 
 <h2>Detalle Cronológico</h2>
-<div class="filters" id="filters">{filter_btns}</div>
+<div class="filter-panel">
+  <div class="fp-header">
+    <span class="fp-title">Filtrar por tipo de evento</span>
+    <div class="fp-actions">
+      <button onclick="selectAll(true)">Seleccionar todos</button>
+      <button onclick="selectAll(false)">Deseleccionar todos</button>
+    </div>
+  </div>
+  <div class="chk-list" id="chk-list">
+{filter_checks}  </div>
+</div>
 <div class="search-bar">
   <span>🔍</span>
   <input type="text" id="search-input" placeholder="Buscar en Timestamp, Línea, Mensaje o Valor…" oninput="applySearch()">
@@ -477,71 +510,67 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
 </div>
 
 <script>
-var _activeId = 'all';
+function getCheckedIds() {
+  return Array.from(document.querySelectorAll('.ev-chk:checked')).map(function(c) { return c.value; });
+}
 
-function filterTable(id, btn) {{
-  document.querySelectorAll('.fbtn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  _activeId = id;
+function selectAll(state) {
+  document.querySelectorAll('.ev-chk').forEach(function(c) { c.checked = state; });
   applySearch();
-}}
+}
 
-function applySearch() {{
-  var term = document.getElementById('search-input').value.trim().toLowerCase();
-  var col  = document.getElementById('search-col').value;
-  var rows = document.querySelectorAll('#detail-table tbody tr');
-  var visible = 0;
+function applySearch() {
+  var term    = document.getElementById('search-input').value.trim().toLowerCase();
+  var col     = document.getElementById('search-col').value;
+  var rows    = document.querySelectorAll('#detail-table tbody tr');
+  var checked = getCheckedIds();
 
-  rows.forEach(function(tr) {{
-    // Filtro por ID
-    var idMatch = (_activeId === 'all' || tr.dataset.id == _activeId);
+  rows.forEach(function(tr) {
+    var idMatch = checked.includes(tr.dataset.id);
 
-    // Filtro por búsqueda
     var searchMatch = true;
-    if (term) {{
+    if (term) {
       var cells = tr.querySelectorAll('td');
-      // col indices: 1=Timestamp, 2=Línea, 3=Mensaje, 4=Valor
       var targets = col === 'all' ? [1,2,3,4] : [parseInt(col)];
-      searchMatch = targets.some(function(i) {{
+      searchMatch = targets.some(function(i) {
         return cells[i] && cells[i].textContent.toLowerCase().includes(term);
-      }});
-    }}
+      });
+    }
 
     var show = idMatch && searchMatch;
     tr.classList.toggle('hidden', !show);
-    if (show) visible++;
 
-    // Highlight
-    [1,2,3,4].forEach(function(i) {{
-      if (!tr.classList.contains('hidden') && term && (col === 'all' || parseInt(col) === i)) {{
+    [1,2,3,4].forEach(function(i) {
+      if (!tr.classList.contains('hidden') && term && (col === 'all' || parseInt(col) === i)) {
         var cell = tr.querySelectorAll('td')[i];
         if (cell) cell.innerHTML = highlight(cell.textContent, term);
-      }} else if (tr.querySelectorAll('td')[i]) {{
+      } else if (tr.querySelectorAll('td')[i]) {
         var cell = tr.querySelectorAll('td')[i];
         if (cell.querySelector('mark')) cell.textContent = cell.textContent;
-      }}
-    }});
-  }});
+      }
+    });
+  });
 
-  var total = Array.from(rows).filter(r => !r.classList.contains('hidden')).length;
+  var total = Array.from(rows).filter(function(r) { return !r.classList.contains('hidden'); }).length;
   document.getElementById('search-count').textContent = term ? total + ' resultado(s)' : '';
-}}
+}
 
-function highlight(text, term) {{
+function highlight(text, term) {
   if (!term) return escHtml(text);
-  var re = new RegExp('(' + term.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&') + ')', 'gi');
+  var escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  var re = new RegExp('(' + escaped + ')', 'gi');
   return escHtml(text).replace(re, '<mark>$1</mark>');
-}}
+}
 
-function escHtml(s) {{
+function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}}
+}
 
-function clearSearch() {{
+function clearSearch() {
   document.getElementById('search-input').value = '';
   document.getElementById('search-count').textContent = '';
   applySearch();
-}}
+}
 </script>
 </body>
 </html>"""
