@@ -38,7 +38,7 @@ def load_events_from_xlsx(xlsx_path):
             continue
         events.append({
             "id":          int(eid),
-            "patron":      str(patron_raw).strip(),
+            "patron":      re.sub(r' {2,}', ' ', str(patron_raw).strip()),
             "significado": str(significado).strip() if significado else "",
         })
     wb.close()
@@ -139,16 +139,17 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
         28: r'Name:\s*EVENTS_NUMBER,\s*Value:\s*(\S+)',
         29: r'"versionFW"\s*:\s*"(v[^"]+)"',
         34: r'Name:\s*SERVICE_ID,\s*Value:\s*(\S+)',
-        39: r'Tabla:RL\s+id:9\s+currVersion:(\S+)',
         40: r'Estado del validador:\s*(\d+)',
-        41: r'Tabla:CO\s+id:3\s+currVersion:(\S+)',
-        42: r'Tabla:CD\s+id:15\s+currVersion:(\S+)',
-        43: r'Tabla:LR\s+id:23\s+currVersion:(\S+)',
-        44: r'Tabla:RS\s+id:16\s+currVersion:(\S+)',
-        45: r'Tabla:GP\s+id:1\s+currVersion:(\S+)',
-        46: r'Tabla:SG\s+id:20\s+currVersion:(\S+)',
-        47: r'Tabla:LI\s+id:18\s+currVersion:(\S+)',
-        48: r'Tabla:OL\s+id:10\s+currVersion:(\S+)',
+        43: r'Tabla:RL\s+id:9\s+currVersion:(\S+)',
+        44: r'Tabla:AL\s+id:11\s+currVersion:(\S+)',
+        45: r'Tabla:CO\s+id:3\s+currVersion:(\S+)',
+        46: r'Tabla:CD\s+id:15\s+currVersion:(\S+)',
+        47: r'Tabla:LR\s+id:23\s+currVersion:(\S+)',
+        48: r'Tabla:RS\s+id:16\s+currVersion:(\S+)',
+        49: r'Tabla:GP\s+id:1\s+currVersion:(\S+)',
+        50: r'Tabla:SG\s+id:20\s+currVersion:(\S+)',
+        51: r'Tabla:LI\s+id:18\s+currVersion:(\S+)',
+        52: r'Tabla:OL\s+id:10\s+currVersion:(\S+)',
     }
     _compiled_value = {eid: re.compile(pat, re.IGNORECASE) for eid, pat in _VALUE_PATTERNS.items()}
 
@@ -286,7 +287,7 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
 <h2>Resumen por Tipo de Evento</h2>
 <div class="tbl-wrap">
 <table>
-  <thead><tr><th>ID</th><th>Ocurrencias</th><th>Patrón buscado</th><th>Valor</th><th>Significado</th></tr></thead>
+  <thead><tr><th>ID</th><th>Ocurrencias</th><th>Patrón buscado</th><th>1er Valor Registrado</th><th>Significado</th></tr></thead>
   <tbody>{summary_rows}</tbody>
 </table>
 </div>
