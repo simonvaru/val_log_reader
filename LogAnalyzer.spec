@@ -5,7 +5,7 @@ a = Analysis(
     ['log_analyzer_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('lista_eventos_vl550.xlsx', '.')],
+    datas=[],
     hiddenimports=['api_tracker', 'requests', 'log_analyzer'],
     hookspath=[],
     hooksconfig={},

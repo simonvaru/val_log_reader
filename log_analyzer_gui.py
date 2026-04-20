@@ -7,6 +7,7 @@ import re
 import sys
 import os
 import csv
+import glob
 import html as h
 import threading
 import tkinter as tk
@@ -34,11 +35,16 @@ def load_events_from_xlsx(xlsx_path):
         eid = row[0]
         patron_raw = row[1]
         significado = row[2] if len(row) > 2 else ""
-        if not eid or not patron_raw:
+        if not eid:
             continue
+        # Si la columna B está vacía, usar el significado (col C) como patrón
+        if not patron_raw:
+            if not significado:
+                continue
+            patron_raw = significado
         events.append({
             "id":          int(eid),
-            "patron":      re.sub(r' {2,}', ' ', str(patron_raw).strip()),
+            "patron":      str(patron_raw).strip(),
             "significado": str(significado).strip() if significado else "",
         })
     wb.close()
@@ -58,8 +64,13 @@ _TS_PATTERN = re.compile(r"^\[(\d{2}/\d{2}/\d{2}-\d{2}:\d{2}:\d{2}\.\d+)\]")
 
 
 def analyze_log(log_lines, events):
+    import unicodedata
+
+    def _normalize(s):
+        return unicodedata.normalize("NFD", s).encode("ascii", "ignore").decode("ascii").lower()
+
     compiled = [
-        (ev, re.compile(re.escape(ev["patron"]), re.IGNORECASE))
+        (ev, re.compile(re.escape(_normalize(ev["patron"]))))
         for ev in events
     ]
     results = []
@@ -67,8 +78,9 @@ def analyze_log(log_lines, events):
         ts_match  = _TS_PATTERN.match(line)
         timestamp = ts_match.group(1) if ts_match else "N/A"
         msg_clean = re.sub(r"^\[.*?\]\[.*?\]\[.*?\]", "", line).strip() or line
+        line_norm = _normalize(line)
         for ev, pattern in compiled:
-            if pattern.search(line):
+            if pattern.search(line_norm):
                 results.append({
                     "id":          ev["id"],
                     "patron":      ev["patron"],
@@ -608,17 +620,19 @@ def main():
     output_var = tk.StringVar()
     status_var = tk.StringVar(value="Listo.")
 
-    _base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     # Directorio real del exe (o del .py si se corre sin empaquetar)
     if getattr(sys, "frozen", False):
-        _exe_dir = os.path.dirname(os.path.dirname(sys.executable))  # sube de dist/ al proyecto
+        _exe_dir = os.path.dirname(sys.executable)
     else:
         _exe_dir = os.path.dirname(os.path.abspath(__file__))
 
-    _default_xlsx = os.path.join(_base, "lista_eventos_vl550.xlsx")
-    if not os.path.exists(_default_xlsx):
-        _default_xlsx = os.path.join(os.getcwd(), "lista_eventos_vl550.xlsx")
-    xlsx_var = tk.StringVar(value=_default_xlsx if os.path.exists(_default_xlsx) else "")
+    # Buscar xlsx SIEMPRE junto al exe/script, nunca dentro de _MEIPASS
+    _default_xlsx = ""
+    for _candidate in glob.glob(os.path.join(_exe_dir, "*.xlsx")):
+        _default_xlsx = _candidate
+        break  # toma el primero que encuentre
+
+    xlsx_var = tk.StringVar(value=_default_xlsx)
 
     # ── Frame principal ───────────────────────────────────────────────────────
     frm = ttk.Frame(root, padding=16)
