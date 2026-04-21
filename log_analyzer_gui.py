@@ -198,8 +198,11 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
     for r in results:
         valor = extract_value(r['id'], r['mensaje'])
         source_td = f"<td class='src'>{h.escape(r.get('_source',''))}</td>" if multi_source else ""
+        src_data = f"data-src='{h.escape(r.get('_source',''))}'" if multi_source else ""
         detail_rows += (
-            f"<tr data-id='{r['id']}'>"
+            f"<tr data-id='{r['id']}' data-ts='{h.escape(r['timestamp'])}' "
+            f"data-ln='{r['linea_num']}' data-msg='{h.escape(r['mensaje'][:80])}' "
+            f"data-val='{h.escape(valor)}' {src_data}>"
             f"<td class='ctr'>{badge(r['id'])}</td>"
             f"{source_td}"
             f"<td class='mono ts'>{h.escape(r['timestamp'])}</td>"
@@ -209,7 +212,7 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
             f"<td class='sig'>{h.escape(r['significado'])}</td>"
             f"</tr>\n"
         )
-    source_th = "<th>Fuente</th>" if multi_source else ""
+    source_th = "<th class='sortable' data-col='src' onclick='sortTable(this)'>Fuente<span class='sort-icon'></span></th>" if multi_source else ""
 
     filter_checks = ""
     for eid in sorted(by_id.keys()):
@@ -282,6 +285,12 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
   .search-bar button{{border:none;background:none;cursor:pointer;color:#888;font-size:1rem;padding:0 4px}}
   .search-bar button:hover{{color:#c62828}}
   mark{{background:#fff176;border-radius:2px;padding:0 1px}}
+  th.sortable{{cursor:pointer;user-select:none;white-space:nowrap}}
+  th.sortable:hover{{background:#243f5e}}
+  th.sortable .sort-icon{{display:inline-block;margin-left:5px;font-size:.75rem;opacity:.45;vertical-align:middle}}
+  th.sortable.asc .sort-icon::after{{content:'▲';opacity:1}}
+  th.sortable.desc .sort-icon::after{{content:'▼';opacity:1}}
+  th.sortable:not(.asc):not(.desc) .sort-icon::after{{content:'⇅'}}
 </style>
 </head>
 <body>
@@ -330,7 +339,7 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
 </div>
 <div class="tbl-wrap">
 <table id="detail-table">
-  <thead><tr><th>ID</th>{source_th}<th>Timestamp</th><th>Línea</th><th>Mensaje</th><th>Valor</th><th>Significado</th></tr></thead>
+  <thead><tr><th>ID</th>{source_th}<th class='sortable' data-col='ts' onclick='sortTable(this)'>Timestamp<span class='sort-icon'></span></th><th class='sortable' data-col='ln' onclick='sortTable(this)'>Línea<span class='sort-icon'></span></th><th class='sortable' data-col='msg' onclick='sortTable(this)'>Mensaje<span class='sort-icon'></span></th><th class='sortable' data-col='val' onclick='sortTable(this)'>Valor<span class='sort-icon'></span></th><th>Significado</th></tr></thead>
   <tbody>{detail_rows}</tbody>
 </table>
 </div>
@@ -372,6 +381,20 @@ function highlight(text,term){{
 }}
 function escHtml(s){{return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}}
 function clearSearch(){{document.getElementById('search-input').value='';document.getElementById('search-count').textContent='';applySearch();}}
+function sortTable(th){{
+  var col=th.dataset.col;
+  var asc=!th.classList.contains('asc');
+  document.querySelectorAll('#detail-table th.sortable').forEach(function(h){{h.classList.remove('asc','desc');}});
+  th.classList.add(asc?'asc':'desc');
+  var tbody=document.querySelector('#detail-table tbody');
+  var rows=Array.from(tbody.querySelectorAll('tr'));
+  rows.sort(function(a,b){{
+    var av=a.dataset[col]||'', bv=b.dataset[col]||'';
+    if(col==='ln'){{return asc?(parseInt(av)||0)-(parseInt(bv)||0):(parseInt(bv)||0)-(parseInt(av)||0);}}
+    return asc?av.localeCompare(bv):bv.localeCompare(av);
+  }});
+  rows.forEach(function(r){{tbody.appendChild(r);}});
+}}
 </script>
 </body>
 </html>"""
