@@ -69,8 +69,22 @@ def analyze_log(log_lines, events):
     def _normalize(s):
         return unicodedata.normalize("NFD", s).encode("ascii", "ignore").decode("ascii").lower()
 
+    def _patron_to_regex(patron):
+        # Escapar todo, luego restaurar * y ? como wildcards
+        # * = cualquier cantidad de caracteres, ? = un solo carácter
+        parts = re.split(r'(\*|\?)', patron)
+        result = ""
+        for part in parts:
+            if part == '*':
+                result += '.*'
+            elif part == '?':
+                result += '.'
+            else:
+                result += re.escape(part)
+        return result
+
     compiled = [
-        (ev, re.compile(re.escape(_normalize(ev["patron"]))))
+        (ev, re.compile(_patron_to_regex(_normalize(ev["patron"]))))
         for ev in events
     ]
     results = []
@@ -162,6 +176,8 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
         50: r'Tabla:SG\s+id:20\s+currVersion:(\S+)',
         51: r'Tabla:LI\s+id:18\s+currVersion:(\S+)',
         52: r'Tabla:OL\s+id:10\s+currVersion:(\S+)',
+        58: r'\\?"latitude\\?"\s*:\s*(-?[0-9]+\.[0-9]+)',
+        59: r'\\?"longitude\\?"\s*:\s*(-?[0-9]+\.[0-9]+)',
     }
     _compiled_value = {eid: re.compile(pat, re.IGNORECASE) for eid, pat in _VALUE_PATTERNS.items()}
 
@@ -180,7 +196,7 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
         sample = by_id[eid][0]
         count  = len(by_id[eid])
         bar_w  = min(count * 18, 200)
-        valor  = extract_value(eid, sample['mensaje'])
+        valor  = extract_value(eid, sample['linea'])
         summary_rows += (
             f"<tr>"
             f"<td class='ctr'>{badge(eid)}</td>"
@@ -196,7 +212,7 @@ def export_html(results, log_file, output_path="reporte_eventos.html"):
     multi_source = any(r.get("_source") for r in results)
     detail_rows = ""
     for r in results:
-        valor = extract_value(r['id'], r['mensaje'])
+        valor = extract_value(r['id'], r['linea'])
         source_td = f"<td class='src'>{h.escape(r.get('_source',''))}</td>" if multi_source else ""
         src_data = f"data-src='{h.escape(r.get('_source',''))}'" if multi_source else ""
         detail_rows += (
