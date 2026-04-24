@@ -694,7 +694,7 @@ def main():
     list_frame.columnconfigure(0, weight=1)
     frm.rowconfigure(1, weight=1)
 
-    log_listbox = tk.Listbox(list_frame, height=6, selectmode=tk.EXTENDED,
+    log_listbox = tk.Listbox(list_frame, height=15, selectmode=tk.EXTENDED,
                               font=("Consolas", 9), activestyle="dotbox")
     log_listbox.grid(row=0, column=0, sticky="nsew")
 
@@ -732,14 +732,14 @@ def main():
 
     # ── Base de eventos ───────────────────────────────────────────────────────
     ttk.Label(frm, text="Base de eventos (.xlsx):").grid(row=2, column=0, sticky="w", **pad)
-    ttk.Entry(frm, textvariable=xlsx_var, width=52).grid(row=2, column=1, sticky="ew", **pad)
+    ttk.Entry(frm, textvariable=xlsx_var, width=80).grid(row=2, column=1, sticky="ew", **pad)
     ttk.Button(frm, text="Examinar…", command=lambda: browse_xlsx(xlsx_var)).grid(
         row=2, column=2, **pad
     )
 
     # ── Archivo de salida ─────────────────────────────────────────────────────
     ttk.Label(frm, text="Guardar reporte en:").grid(row=3, column=0, sticky="w", **pad)
-    ttk.Entry(frm, textvariable=output_var, width=52).grid(row=3, column=1, sticky="ew", **pad)
+    ttk.Entry(frm, textvariable=output_var, width=80).grid(row=3, column=1, sticky="ew", **pad)
     ttk.Button(frm, text="Guardar como…", command=lambda: browse_output(output_var, _exe_dir)).grid(
         row=3, column=2, **pad
     )
